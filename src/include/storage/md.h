@@ -48,4 +48,8 @@ extern int	mdsyncfiletag(const FileTag *ftag, char *path);
 extern int	mdunlinkfiletag(const FileTag *ftag, char *path);
 extern bool mdfiletagmatches(const FileTag *ftag, const FileTag *candidate);
 
+/*for pmem*/
+extern void *mdlocation(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum);
+//void  mdmarkdirty(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum);
+
 #endif							/* MD_H */

@@ -256,7 +256,7 @@ dataLocateItem(GinBtree btree, GinBtreeStack *stack)
 				maxoff;
 	PostingItem *pitem = NULL;
 	int			result;
-	Page		page = BufferGetPage(stack->buffer);
+	Page		page = BufferGetPage(btree->index->rd_smgr,stack->buffer);
 
 	Assert(!GinPageIsLeaf(page));
 	Assert(GinPageIsData(page));
@@ -453,7 +453,7 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 	GinBtreeDataLeafInsertData *items = insertdata;
 	ItemPointer newItems = &items->items[items->curitem];
 	int			maxitems = items->nitem - items->curitem;
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(btree->index->rd_smgr,buf);
 	int			i;
 	ItemPointerData rbound;
 	ItemPointerData lbound;
@@ -734,7 +734,7 @@ dataExecPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 void
 ginVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, GinVacuumState *gvs)
 {
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(indexrel->rd_smgr,buffer);
 	disassembledLeaf *leaf;
 	bool		removedsomething = false;
 	dlist_iter	iter;
@@ -974,7 +974,7 @@ computeLeafRecompressWALData(disassembledLeaf *leaf)
 static void
 dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(NULL,buf);
 	char	   *ptr;
 	int			newsize;
 	bool		modified = false;
@@ -1118,7 +1118,7 @@ dataBeginPlaceToPageInternal(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 							 void **ptp_workspace,
 							 Page *newlpage, Page *newrpage)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(btree->index->rd_smgr,buf);
 
 	/* If it doesn't fit, deal with split case */
 	if (GinNonLeafDataPageGetFreeSpace(page) < sizeof(PostingItem))
@@ -1143,7 +1143,7 @@ dataExecPlaceToPageInternal(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 							void *insertdata, BlockNumber updateblkno,
 							void *ptp_workspace)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(btree->index->rd_smgr,buf);
 	OffsetNumber off = stack->off;
 	PostingItem *pitem;
 
@@ -1197,7 +1197,7 @@ dataBeginPlaceToPage(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 					 void **ptp_workspace,
 					 Page *newlpage, Page *newrpage)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(btree->index->rd_smgr,buf);
 
 	Assert(GinPageIsData(page));
 
@@ -1226,7 +1226,7 @@ dataExecPlaceToPage(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 					void *insertdata, BlockNumber updateblkno,
 					void *ptp_workspace)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(btree->index->rd_smgr,buf);
 
 	if (GinPageIsLeaf(page))
 		dataExecPlaceToPageLeaf(btree, buf, stack, insertdata,
@@ -1248,7 +1248,7 @@ dataSplitPageInternal(GinBtree btree, Buffer origbuf,
 					  void *insertdata, BlockNumber updateblkno,
 					  Page *newlpage, Page *newrpage)
 {
-	Page		oldpage = BufferGetPage(origbuf);
+	Page		oldpage = BufferGetPage(btree->index->rd_smgr,origbuf);
 	OffsetNumber off = stack->off;
 	int			nitems = GinPageGetOpaque(oldpage)->maxoff;
 	int			nleftitems;
@@ -1327,7 +1327,7 @@ static void *
 dataPrepareDownlink(GinBtree btree, Buffer lbuf)
 {
 	PostingItem *pitem = palloc(sizeof(PostingItem));
-	Page		lpage = BufferGetPage(lbuf);
+	Page		lpage = BufferGetPage(btree->index->rd_smgr,lbuf);
 
 	PostingItemSetBlockNumber(pitem, BufferGetBlockNumber(lbuf));
 	pitem->key = *GinDataPageGetRightBound(lpage);
@@ -1816,7 +1816,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 	 * All set. Get a new physical page, and copy the in-memory page to it.
 	 */
 	buffer = GinNewBuffer(index);
-	page = BufferGetPage(buffer);
+	page = BufferGetPage(index->rd_smgr,buffer);
 	blkno = BufferGetBlockNumber(buffer);
 
 	/*

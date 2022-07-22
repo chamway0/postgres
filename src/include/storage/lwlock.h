@@ -15,7 +15,7 @@
 #define LWLOCK_H
 
 #ifdef FRONTEND
-#error "lwlock.h may not be included from frontend code"
+//#error "lwlock.h may not be included from frontend code"
 #endif
 
 #include "storage/proclist_types.h"

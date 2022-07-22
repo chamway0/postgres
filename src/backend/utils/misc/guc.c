@@ -2152,6 +2152,16 @@ static struct config_int ConfigureNamesInt[] =
 	 * checking for overflow, so we mustn't allow more than INT_MAX / 2.
 	 */
 	{
+		{"share_buffer_type", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the shared buffer type."),
+			NULL,
+			GUC_UNIT
+		},
+		&share_buffer_type,
+		1, 1, 10,
+		NULL, NULL, NULL
+	},
+	{
 		{"shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the number of shared memory buffers used by the server."),
 			NULL,
@@ -4443,7 +4453,7 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&sync_method,
 		DEFAULT_SYNC_METHOD, sync_method_options,
-		NULL, assign_xlog_sync_method, NULL
+		check_xlog_sync_method, assign_xlog_sync_method, NULL
 	},
 
 	{

@@ -228,7 +228,7 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 	regbuf = &registered_buffers[block_id];
 
 	BufferGetTag(buffer, &regbuf->rnode, &regbuf->forkno, &regbuf->block);
-	regbuf->page = BufferGetPage(buffer);
+	regbuf->page = BufferGetPage(NULL,buffer);
 	regbuf->flags = flags;
 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
 	regbuf->rdata_len = 0;
@@ -860,7 +860,7 @@ XLogCheckBufferNeedsBackup(Buffer buffer)
 
 	GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 
-	page = BufferGetPage(buffer);
+	page = BufferGetPage(NULL,buffer);
 
 	if (doPageWrites && PageGetLSN(page) <= RedoRecPtr)
 		return true;			/* buffer requires backup */
@@ -918,7 +918,7 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
 	{
 		int			flags;
 		PGAlignedBlock copied_buffer;
-		char	   *origdata = (char *) BufferGetBlock(buffer);
+		char	   *origdata = (char *) BufferGetBlock(NULL,buffer);
 		RelFileNode rnode;
 		ForkNumber	forkno;
 		BlockNumber blkno;
@@ -931,7 +931,7 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
 		if (buffer_std)
 		{
 			/* Assume we can omit data between pd_lower and pd_upper */
-			Page		page = BufferGetPage(buffer);
+			Page		page = BufferGetPage(NULL,buffer);
 			uint16		lower = ((PageHeader) page)->pd_lower;
 			uint16		upper = ((PageHeader) page)->pd_upper;
 
@@ -1008,7 +1008,7 @@ log_newpage(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
 XLogRecPtr
 log_newpage_buffer(Buffer buffer, bool page_std)
 {
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(NULL,buffer);
 	RelFileNode rnode;
 	ForkNumber	forkNum;
 	BlockNumber blkno;
@@ -1081,7 +1081,7 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 			 * would change the LSN, and we don't want that. We want the page
 			 * to stay empty.
 			 */
-			if (!PageIsNew(BufferGetPage(buf)))
+			if (!PageIsNew(BufferGetPage(NULL,buf)))
 				bufpack[nbufs++] = buf;
 			else
 				UnlockReleaseBuffer(buf);
@@ -1102,7 +1102,7 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 
 		for (i = 0; i < nbufs; i++)
 		{
-			PageSetLSN(BufferGetPage(bufpack[i]), recptr);
+			PageSetLSN(BufferGetPage(NULL,bufpack[i]), recptr);
 			UnlockReleaseBuffer(bufpack[i]);
 		}
 		END_CRIT_SECTION();

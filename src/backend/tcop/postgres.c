@@ -78,6 +78,7 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 #include "mb/pg_wchar.h"
+//#include "lib/profiler.h"
 
 
 /* ----------------
@@ -3740,6 +3741,7 @@ PostgresMain(int argc, char *argv[],
 			 const char *dbname,
 			 const char *username)
 {
+	//ProfilerStart("/mnt/pmem0/sqw/install/demo.prof"); 
 	int			firstchar;
 	StringInfoData input_message;
 	sigjmp_buf	local_sigjmp_buf;
@@ -4506,6 +4508,7 @@ PostgresMain(int argc, char *argv[],
 								firstchar)));
 		}
 	}							/* end of input-reading loop */
+	//ProfilerStop();
 }
 
 /*

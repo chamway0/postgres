@@ -67,7 +67,7 @@ restart_insert:
 	 * without a lock.
 	 */
 	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_NOLOCK, LH_META_PAGE);
-	metapage = BufferGetPage(metabuf);
+	metapage = BufferGetPage(rel->rd_smgr,metabuf);
 
 	/*
 	 * Check whether the item can fit on a hash page at all. (Eventually, we
@@ -93,7 +93,7 @@ restart_insert:
 	/* remember the primary bucket buffer to release the pin on it at end. */
 	bucket_buf = buf;
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 	pageopaque = (HashPageOpaque) PageGetSpecialPointer(page);
 	bucket = pageopaque->hasho_bucket;
 
@@ -163,7 +163,7 @@ restart_insert:
 			else
 				LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 			buf = _hash_getbuf(rel, nextblkno, HASH_WRITE, LH_OVERFLOW_PAGE);
-			page = BufferGetPage(buf);
+			page = BufferGetPage(rel->rd_smgr,buf);
 		}
 		else
 		{
@@ -177,7 +177,7 @@ restart_insert:
 
 			/* chain to a new overflow page */
 			buf = _hash_addovflpage(rel, metabuf, buf, (buf == bucket_buf) ? true : false);
-			page = BufferGetPage(buf);
+			page = BufferGetPage(rel->rd_smgr,buf);
 
 			/* should fit now, given test above */
 			Assert(PageGetFreeSpace(page) >= itemsz);
@@ -228,8 +228,8 @@ restart_insert:
 
 		recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_INSERT);
 
-		PageSetLSN(BufferGetPage(buf), recptr);
-		PageSetLSN(BufferGetPage(metabuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,buf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,metabuf), recptr);
 	}
 
 	END_CRIT_SECTION();
@@ -272,7 +272,7 @@ _hash_pgaddtup(Relation rel, Buffer buf, Size itemsize, IndexTuple itup)
 	uint32		hashkey;
 
 	_hash_checkpage(rel, buf, LH_BUCKET_PAGE | LH_OVERFLOW_PAGE);
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 
 	/* Find where to insert the tuple (preserving page's hashkey ordering) */
 	hashkey = _hash_get_indextuple_hashkey(itup);
@@ -305,7 +305,7 @@ _hash_pgaddmultitup(Relation rel, Buffer buf, IndexTuple *itups,
 	int			i;
 
 	_hash_checkpage(rel, buf, LH_BUCKET_PAGE | LH_OVERFLOW_PAGE);
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 
 	for (i = 0; i < nitups; i++)
 	{
@@ -341,7 +341,7 @@ _hash_vacuum_one_page(Relation rel, Relation hrel, Buffer metabuf, Buffer buf)
 	int			ndeletable = 0;
 	OffsetNumber offnum,
 				maxoff;
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(rel->rd_smgr,buf);
 	HashPageOpaque pageopaque;
 	HashMetaPage metap;
 
@@ -386,7 +386,7 @@ _hash_vacuum_one_page(Relation rel, Relation hrel, Buffer metabuf, Buffer buf)
 		pageopaque = (HashPageOpaque) PageGetSpecialPointer(page);
 		pageopaque->hasho_flag &= ~LH_PAGE_HAS_DEAD_TUPLES;
 
-		metap = HashPageGetMeta(BufferGetPage(metabuf));
+		metap = HashPageGetMeta(BufferGetPage(rel->rd_smgr,metabuf));
 		metap->hashm_ntuples -= ndeletable;
 
 		MarkBufferDirty(buf);
@@ -417,8 +417,8 @@ _hash_vacuum_one_page(Relation rel, Relation hrel, Buffer metabuf, Buffer buf)
 
 			recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_VACUUM_ONE_PAGE);
 
-			PageSetLSN(BufferGetPage(buf), recptr);
-			PageSetLSN(BufferGetPage(metabuf), recptr);
+			PageSetLSN(BufferGetPage(rel->rd_smgr,buf), recptr);
+			PageSetLSN(BufferGetPage(rel->rd_smgr,metabuf), recptr);
 		}
 
 		END_CRIT_SECTION();

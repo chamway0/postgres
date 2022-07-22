@@ -864,7 +864,7 @@ lazy_scan_heap(Relation onerel, VacuumParams *params, LVRelStats *vacrelstats,
 		vacrelstats->scanned_pages++;
 		vacrelstats->tupcount_pages++;
 
-		page = BufferGetPage(buf);
+		page = BufferGetPage(onerel->rd_smgr,buf);
 
 		if (PageIsNew(page))
 		{
@@ -1540,7 +1540,7 @@ lazy_vacuum_heap(Relation onerel, LVRelStats *vacrelstats)
 									&vmbuffer);
 
 		/* Now that we've compacted the page, record its available space */
-		page = BufferGetPage(buf);
+		page = BufferGetPage(onerel->rd_smgr,buf);
 		freespace = PageGetHeapFreeSpace(page);
 
 		UnlockReleaseBuffer(buf);
@@ -1575,7 +1575,7 @@ static int
 lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 				 int tupindex, LVRelStats *vacrelstats, Buffer *vmbuffer)
 {
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(onerel->rd_smgr,buffer);
 	OffsetNumber unused[MaxOffsetNumber];
 	int			uncnt = 0;
 	TransactionId visibility_cutoff_xid;
@@ -1672,7 +1672,7 @@ lazy_vacuum_page(Relation onerel, BlockNumber blkno, Buffer buffer,
 static bool
 lazy_check_needs_freeze(Buffer buf, bool *hastup)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(NULL,buf);
 	OffsetNumber offnum,
 				maxoff;
 	HeapTupleHeader tupleheader;
@@ -2072,7 +2072,7 @@ count_nondeletable_pages(Relation onerel, LVRelStats *vacrelstats)
 		/* In this phase we only need shared access to the buffer */
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 
-		page = BufferGetPage(buf);
+		page = BufferGetPage(onerel->rd_smgr,buf);
 
 		if (PageIsNew(page) || PageIsEmpty(page))
 		{
@@ -2239,7 +2239,7 @@ heap_page_is_all_visible(Relation rel, Buffer buf,
 						 TransactionId *visibility_cutoff_xid,
 						 bool *all_frozen)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(rel->rd_smgr,buf);
 	BlockNumber blockno = BufferGetBlockNumber(buf);
 	OffsetNumber offnum,
 				maxoff;

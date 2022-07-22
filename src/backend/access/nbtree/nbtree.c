@@ -799,7 +799,7 @@ _bt_vacuum_needs_cleanup(IndexVacuumInfo *info)
 	bool		result = false;
 
 	metabuf = _bt_getbuf(info->index, BTREE_METAPAGE, BT_READ);
-	metapg = BufferGetPage(metabuf);
+	metapg = BufferGetPage(info->index->rd_smgr,metabuf);
 	metad = BTPageGetMeta(metapg);
 
 	if (metad->btm_version < BTREE_NOVAC_VERSION)
@@ -1143,7 +1143,7 @@ restart:
 	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
 							 info->strategy);
 	LockBuffer(buf, BT_READ);
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 	if (!PageIsNew(page))
 	{
 		_bt_checkpage(rel, buf);

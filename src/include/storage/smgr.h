@@ -105,6 +105,10 @@ extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
 extern void smgrtruncate(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern void *smgrlocation(SMgrRelation reln, ForkNumber forknum,
+						 BlockNumber blocknum,RelFileNode* rnode);
+//extern void smgrmarkdirty(SMgrRelation reln, ForkNumber forknum,
+//						 BlockNumber blocknum);						 
 extern void AtEOXact_SMgr(void);
 
 #endif							/* SMGR_H */

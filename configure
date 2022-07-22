@@ -5204,13 +5204,10 @@ elif test "${CFLAGS+set}" = set; then
   : # (keep what template set)
 elif test "$enable_coverage" = yes; then
   : # no optimization by default
+elif test "$enable_debug" = yes; then
+  CFLAGS="-O0"
 elif test "$GCC" = yes; then
   CFLAGS="-O2"
-else
-  # if the user selected debug mode, don't use -O
-  if test "$enable_debug" != yes; then
-    CFLAGS="-O"
-  fi
 fi
 
 if test "$ac_env_CXXFLAGS_set" = set; then
@@ -5219,13 +5216,10 @@ elif test "${CXXFLAGS+set}" = set; then
   : # (keep what template set)
 elif test "$enable_coverage" = yes; then
   : # no optimization by default
+elif test "$enable_debug" = yes; then
+  CXXFLAGS="-O0"
 elif test "$GCC" = yes; then
-  CXXFLAGS="-O2"
-else
-  # if the user selected debug mode, don't use -O
-  if test "$enable_debug" != yes; then
-    CXXFLAGS="-O"
-  fi
+  CXXFLAGS="-O2"  
 fi
 
 # When generating bitcode (for inlining) we always want to use -O2

@@ -72,7 +72,7 @@ static void heap_prune_record_unused(PruneState *prstate, OffsetNumber offnum);
 void
 heap_page_prune_opt(Relation relation, Buffer buffer)
 {
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(relation->rd_smgr,buffer);
 	Size		minfree;
 	TransactionId OldestXmin;
 
@@ -181,7 +181,7 @@ heap_page_prune(Relation relation, Buffer buffer, TransactionId OldestXmin,
 				bool report_stats, TransactionId *latestRemovedXid)
 {
 	int			ndeleted = 0;
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(relation->rd_smgr,buffer);
 	OffsetNumber offnum,
 				maxoff;
 	PruneState	prstate;
@@ -268,7 +268,7 @@ heap_page_prune(Relation relation, Buffer buffer, TransactionId OldestXmin,
 									prstate.nowunused, prstate.nunused,
 									prstate.latestRemovedXid);
 
-			PageSetLSN(BufferGetPage(buffer), recptr);
+			PageSetLSN(BufferGetPage(relation->rd_smgr,buffer), recptr);
 		}
 	}
 	else
@@ -354,7 +354,7 @@ heap_prune_chain(Relation relation, Buffer buffer, OffsetNumber rootoffnum,
 				 PruneState *prstate)
 {
 	int			ndeleted = 0;
-	Page		dp = (Page) BufferGetPage(buffer);
+	Page		dp = (Page) BufferGetPage(relation->rd_smgr,buffer);
 	TransactionId priorXmax = InvalidTransactionId;
 	ItemId		rootlp;
 	HeapTupleHeader htup;
@@ -683,7 +683,7 @@ heap_page_prune_execute(Buffer buffer,
 						OffsetNumber *nowdead, int ndead,
 						OffsetNumber *nowunused, int nunused)
 {
-	Page		page = (Page) BufferGetPage(buffer);
+	Page		page = (Page) BufferGetPage(NULL,buffer);
 	OffsetNumber *offnum;
 	int			i;
 

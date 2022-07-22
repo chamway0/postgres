@@ -441,7 +441,7 @@ hash_bitmap_info(PG_FUNCTION_ARGS)
 
 	/* Read the metapage so we can determine which bitmap page to use */
 	metabuf = _hash_getbuf(indexRel, HASH_METAPAGE, HASH_READ, LH_META_PAGE);
-	metap = HashPageGetMeta(BufferGetPage(metabuf));
+	metap = HashPageGetMeta(BufferGetPage(indexRel.rd_smgr,metabuf));
 
 	/*
 	 * Reject attempt to read the bit for a metapage or bitmap page; this is
@@ -480,7 +480,7 @@ hash_bitmap_info(PG_FUNCTION_ARGS)
 
 	/* Check the status of bitmap bit for overflow page */
 	mapbuf = _hash_getbuf(indexRel, bitmapblkno, HASH_READ, LH_BITMAP_PAGE);
-	mappage = BufferGetPage(mapbuf);
+	mappage = BufferGetPage(indexRel.rd_smgr,mapbuf);
 	freep = HashPageGetBitmap(mappage);
 
 	bit = ISSET(freep, bitmapbit) != 0;

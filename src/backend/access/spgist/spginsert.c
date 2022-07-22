@@ -98,7 +98,7 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 
 	START_CRIT_SECTION();
 
-	SpGistInitMetapage(BufferGetPage(metabuffer));
+	SpGistInitMetapage(BufferGetPage(index->rd_smgr,metabuffer));
 	MarkBufferDirty(metabuffer);
 	SpGistInitBuffer(rootbuffer, SPGIST_LEAF);
 	MarkBufferDirty(rootbuffer);

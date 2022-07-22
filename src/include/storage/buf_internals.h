@@ -187,6 +187,7 @@ typedef struct BufferDesc
 	int			freeNext;		/* link in freelist chain */
 
 	LWLock		content_lock;	/* to lock access to buffer contents */
+	PageXLogRecPtr lsn;
 } BufferDesc;
 
 /*
@@ -308,6 +309,7 @@ extern void ScheduleBufferTagForWriteback(WritebackContext *context, BufferTag *
 /* freelist.c */
 extern BufferDesc *StrategyGetBuffer(BufferAccessStrategy strategy,
 									 uint32 *buf_state);
+extern BufferDesc *StrategyGetBuffer2(PageHeader page,BufferDesc *old_buf,bool *foundPtr);
 extern void StrategyFreeBuffer(BufferDesc *buf);
 extern bool StrategyRejectBuffer(BufferAccessStrategy strategy,
 								 BufferDesc *buf);
@@ -324,7 +326,7 @@ extern Size BufTableShmemSize(int size);
 extern void InitBufTable(int size);
 extern uint32 BufTableHashCode(BufferTag *tagPtr);
 extern int	BufTableLookup(BufferTag *tagPtr, uint32 hashcode);
-extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
+extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int *buf_id);
 extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
 
 /* localbuf.c */

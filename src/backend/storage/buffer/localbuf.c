@@ -68,6 +68,9 @@ LocalPrefetchBuffer(SMgrRelation smgr, ForkNumber forkNum,
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
 
+	if( share_buffer_type == 2)
+		return;
+		
 	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
 
 	/* Initialize local buffers if first request in this session */

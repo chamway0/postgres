@@ -357,6 +357,56 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	}
 }
 
+BufferDesc *
+StrategyGetBuffer2(PageHeader page,BufferDesc *old_buf,bool *foundPtr)
+{
+	BufferDesc *buf = NULL;
+	bool need = false;
+
+	/* Acquire the spinlock to remove element from the freelist */
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	if (StrategyControl->firstFreeBuffer < 0)
+	{
+		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		elog(ERROR,"no free buffer id");
+		return NULL;
+	}
+
+	need = old_buf ? (old_buf->buf_id < 0 || !( old_buf->lsn.xrecoff == page->pd_lsn.xrecoff && old_buf->lsn.xlogid == page->pd_lsn.xlogid)) :
+					 (page->pd_bufid <= 0);
+
+	if ( need )
+	{
+		buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
+		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+		
+		buf->lsn = page->pd_lsn;
+		buf->buf_id = StrategyControl->firstFreeBuffer;
+		page->pd_bufid = buf->buf_id;
+
+		/* Unconditionally remove buffer from freelist */
+		StrategyControl->firstFreeBuffer = buf->freeNext;
+		buf->freeNext = FREENEXT_NOT_IN_LIST;
+	}
+	
+	/*
+		* Release the lock so someone else can access the freelist while
+		* we check out this buffer.
+		*/
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+
+	if(buf == NULL)
+	{
+		*foundPtr = true;
+		buf = GetBufferDescriptor(page->pd_bufid);
+	}
+	else
+		*foundPtr = false;
+
+	return buf;
+}
+
 /*
  * StrategyFreeBuffer: put a buffer on the freelist
  */
@@ -509,7 +559,7 @@ StrategyInitialize(bool init)
 		 * Grab the whole linked list of free buffers for our strategy. We
 		 * assume it was previously set up by InitBufferPool().
 		 */
-		StrategyControl->firstFreeBuffer = 0;
+		StrategyControl->firstFreeBuffer = (share_buffer_type == 1)? 0 : 1;//PM模式从第2个buffer开始分配，PageHeader里pd_bufid为0是判断为无效
 		StrategyControl->lastFreeBuffer = NBuffers - 1;
 
 		/* Initialize the clock sweep pointer */

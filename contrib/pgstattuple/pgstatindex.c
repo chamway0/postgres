@@ -242,7 +242,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 	 */
 	{
 		Buffer		buffer = ReadBufferExtended(rel, MAIN_FORKNUM, 0, RBM_NORMAL, bstrategy);
-		Page		page = BufferGetPage(buffer);
+		Page		page = BufferGetPage(rel->rd_smgr,buffer);
 		BTMetaPageData *metad = BTPageGetMeta(page);
 
 		indexStat.version = metad->btm_version;
@@ -280,7 +280,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 		buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL, bstrategy);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(rel->rd_smgr,buffer);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
 		/* Determine page type, and update totals */
@@ -543,7 +543,7 @@ pgstatginindex_internal(Oid relid, FunctionCallInfo fcinfo)
 	 */
 	buffer = ReadBuffer(rel, GIN_METAPAGE_BLKNO);
 	LockBuffer(buffer, GIN_SHARE);
-	page = BufferGetPage(buffer);
+	page = BufferGetPage(rel->rd_smgr,buffer);
 	metadata = GinPageGetMeta(page);
 
 	stats.version = metadata->ginVersion;
@@ -618,7 +618,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 	/* Get the information we need from the metapage. */
 	memset(&stats, 0, sizeof(stats));
 	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_READ, LH_META_PAGE);
-	metap = HashPageGetMeta(BufferGetPage(metabuf));
+	metap = HashPageGetMeta(BufferGetPage(rel->rd_smgr,metabuf));
 	stats.version = metap->hashm_version;
 	stats.space_per_page = metap->hashm_bsize;
 	_hash_relbuf(rel, metabuf);
@@ -640,7 +640,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 		buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
 								 bstrategy);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
-		page = (Page) BufferGetPage(buf);
+		page = (Page) BufferGetPage(rel->rd_smgr,buf);
 
 		if (PageIsNew(page))
 			stats.unused_pages++;

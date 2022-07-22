@@ -829,7 +829,7 @@ redirect:
 
 			/* else new pointer points to the same page, no work needed */
 
-			page = BufferGetPage(buffer);
+			page = BufferGetPage(index->rd_smgr,buffer);
 			TestForOldSnapshot(snapshot, index, page);
 
 			isnull = SpGistPageStoresNulls(page) ? true : false;

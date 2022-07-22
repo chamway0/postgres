@@ -352,7 +352,7 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 	buf = ReadBuffer(rel, P_NEW);
 	Assert(BufferGetBlockNumber(buf) == 0);
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 
 	PageInit(page, BufferGetPageSize(buf), sizeof(sequence_magic));
 	sm = (sequence_magic *) PageGetSpecialPointer(page);
@@ -644,7 +644,7 @@ nextval_internal(Oid relid, bool check_permissions)
 
 	/* lock page' buffer and read tuple */
 	seq = read_seq_tuple(seqrel, &buf, &seqdatatuple);
-	page = BufferGetPage(buf);
+	page = BufferGetPage(seqrel->rd_smgr,buf);
 
 	elm->increment = incby;
 	last = next = result = seq->last_value;
@@ -993,7 +993,7 @@ do_setval(Oid relid, int64 next, bool iscalled)
 	{
 		xl_seq_rec	xlrec;
 		XLogRecPtr	recptr;
-		Page		page = BufferGetPage(buf);
+		Page		page = BufferGetPage(seqrel->rd_smgr,buf);
 
 		XLogBeginInsert();
 		XLogRegisterBuffer(0, buf, REGBUF_WILL_INIT);
@@ -1177,7 +1177,7 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
 	*buf = ReadBuffer(rel, 0);
 	LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
 
-	page = BufferGetPage(*buf);
+	page = BufferGetPage(rel->rd_smgr,*buf);
 	sm = (sequence_magic *) PageGetSpecialPointer(page);
 
 	if (sm->magic != SEQ_MAGIC)
@@ -1896,7 +1896,7 @@ seq_redo(XLogReaderState *record)
 		elog(PANIC, "seq_redo: unknown op code %u", info);
 
 	buffer = XLogInitBufferForRedo(record, 0);
-	page = (Page) BufferGetPage(buffer);
+	page = (Page) BufferGetPage(NULL,buffer);
 
 	/*
 	 * We always reinit the page.  However, since this WAL record type is also

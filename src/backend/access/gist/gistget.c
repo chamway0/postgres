@@ -56,7 +56,7 @@ gistkillitems(IndexScanDesc scan)
 
 	LockBuffer(buffer, GIST_SHARE);
 	gistcheckpage(scan->indexRelation, buffer);
-	page = BufferGetPage(buffer);
+	page = BufferGetPage(scan->indexRelation->rd_smgr,buffer);
 
 	/*
 	 * If page LSN differs it means that the page was modified since the last
@@ -345,7 +345,7 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 	LockBuffer(buffer, GIST_SHARE);
 	PredicateLockPage(r, BufferGetBlockNumber(buffer), scan->xs_snapshot);
 	gistcheckpage(scan->indexRelation, buffer);
-	page = BufferGetPage(buffer);
+	page = BufferGetPage(scan->indexRelation->rd_smgr,buffer);
 	TestForOldSnapshot(scan->xs_snapshot, r, page);
 	opaque = GistPageGetOpaque(page);
 

@@ -71,6 +71,9 @@
 #include "storage/pg_shmem.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
+#include "storage/libpmem.h"
+#include "utils/elog.h"
+#include <sys/mman.h>
 
 
 /* shared memory global variables */
@@ -442,7 +445,27 @@ ShmemInitStruct(const char *name, Size size, bool *foundPtr)
 	else
 	{
 		/* It isn't in the table yet. allocate and initialize it */
-		structPtr = ShmemAllocNoError(size);
+		// if( (share_buffer_type == 3) && 
+		// 	(strcmp(name, "Buffer Descriptors") == 0 || 
+		// 	 strcmp(name, "Buffer Blocks") == 0 || 
+		// 	 strcmp(name, "Checkpoint BufferIds") == 0 ||
+		// 	 strcmp(name, "Checkpointer Data") == 0 
+		// 	//  strcmp(name, "Shared Buffer Lookup Table") == 0 ||
+		// 	//  strcmp(name, "Buffer Strategy Status") == 0
+		// 	))
+		// {
+		// 	//data page on pm
+		// 	size_t map_len = 0;
+		// 	int is_pmem = 0;
+		// 	structPtr = pmem_map_file( "/mnt/pmem0",size,PMEM_FILE_CREATE|PMEM_FILE_TMPFILE,0666,&map_len,&is_pmem);
+
+		// 	elog(LOG, "### data page on pm. %s,allocsize:%ld",name,size);
+		// }
+		// else
+		{
+			structPtr = ShmemAllocNoError(size);
+		}
+
 		if (structPtr == NULL)
 		{
 			/* out of memory; remove the failed ShmemIndex entry */

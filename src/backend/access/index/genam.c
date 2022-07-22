@@ -287,7 +287,7 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 	ItemPointerData *ttids =
 	(ItemPointerData *) palloc(sizeof(ItemPointerData) * nitems);
 	TransactionId latestRemovedXid = InvalidTransactionId;
-	Page		ipage = BufferGetPage(ibuf);
+	Page		ipage = BufferGetPage(irel->rd_smgr,ibuf);
 	IndexTuple	itup;
 
 	/* identify what the index tuples about to be deleted point to */

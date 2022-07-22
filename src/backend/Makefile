@@ -52,6 +52,13 @@ LIBS += -lsystemd
 endif
 
 ##########################################################################
+#PMem
+LIBS += -L$(top_builddir)/install/lib/
+LIBS += -lpmem
+##########################################################################
+#LIBS += -L/mnt/nvmedir/postgres_nvme/gperftools-gperftools-2.10/install/lib
+#LIBS += -lprofiler
+##########################################################################
 
 all: submake-libpgport submake-catalog-headers submake-utils-headers postgres $(POSTGRES_IMP)
 

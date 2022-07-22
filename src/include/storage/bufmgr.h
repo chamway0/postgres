@@ -18,8 +18,10 @@
 #include "storage/buf.h"
 #include "storage/bufpage.h"
 #include "storage/relfilenode.h"
+#include "storage/buf_internals.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
+#include "miscadmin.h"
 
 typedef void *Block;
 
@@ -123,13 +125,17 @@ extern PGDLLIMPORT int32 *LocalRefCount;
  * Note:
  *		Assumes buffer is valid.
  */
-#define BufferGetBlock(buffer) \
+#define BufferGetBlock(reln,buffer) \
 ( \
 	AssertMacro(BufferIsValid(buffer)), \
 	BufferIsLocal(buffer) ? \
 		LocalBufferBlockPointers[-(buffer) - 1] \
 	: \
-		(Block) (BufferBlocks + ((Size) ((buffer) - 1)) * BLCKSZ) \
+		((share_buffer_type == 1)? ((Block) (BufferBlocks + ((Size) ((buffer) - 1)) * BLCKSZ)) : \
+			( smgrlocation( reln,\
+				(GetBufferDescriptor((buffer) - 1))->tag.forkNum,\
+				(GetBufferDescriptor((buffer) - 1))->tag.blockNum,\
+				&((GetBufferDescriptor((buffer) - 1))->tag.rnode)) ) ) \
 )
 
 /*
@@ -156,7 +162,18 @@ extern PGDLLIMPORT int32 *LocalRefCount;
  * When this is called as part of a scan, there may be a need for a nearby
  * call to TestForOldSnapshot().  See the definition of that for details.
  */
-#define BufferGetPage(buffer) ((Page)BufferGetBlock(buffer))
+#define BufferGetPage(reln,buffer) ((Page)BufferGetBlock(reln,buffer))
+
+
+/* Note: these two macros only work on shared buffers, not local ones! */
+#define BufHdrGetBlock(reln,bufHdr)	(share_buffer_type == 1)? ((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ)) : \
+( smgrlocation( reln,(bufHdr)->tag.forkNum,(bufHdr)->tag.blockNum,&(bufHdr)->tag.rnode) )    //根据BufferDesc获取页面地址
+
+#define BufferGetLSN(reln,bufHdr)	(PageGetLSN(BufHdrGetBlock(reln,bufHdr)))
+
+/*根据SMgrRelation frokNum blockNum获取对应的BufferDesc数组下标*/
+#define BlockNumGetPageHeader(reln,forkNum,blockNum) ((PageHeader)(smgrlocation( reln,forkNum,blockNum,NULL)))
+#define BlockNumGetBufferId(reln,forkNum,blockNum) ((BlockNumGetPageHeader( reln,forkNum,blockNum))->pd_bufid)
 
 /*
  * prototypes for functions in bufmgr.c
@@ -231,6 +248,9 @@ extern void TestForOldSnapshot_impl(Snapshot snapshot, Relation relation);
 extern BufferAccessStrategy GetAccessStrategy(BufferAccessStrategyType btype);
 extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
+//
+extern void PinBuffer_Locked2(Buffer b,uint32 buf_state);
+extern void UnpinBuffer2(int buf_id, bool fixOwner);
 
 /* inline functions */
 

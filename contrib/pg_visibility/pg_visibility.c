@@ -143,7 +143,7 @@ pg_visibility(PG_FUNCTION_ARGS)
 		buffer = ReadBuffer(rel, blkno);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(rel->rd_smgr,buffer);
 		values[2] = BoolGetDatum(PageIsAllVisible(page));
 
 		UnlockReleaseBuffer(buffer);
@@ -515,7 +515,7 @@ collect_visibility_data(Oid relid, bool include_pd)
 										bstrategy);
 			LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
-			page = BufferGetPage(buffer);
+			page = BufferGetPage(rel->rd_smgr,buffer);
 			if (PageIsAllVisible(page))
 				info->bits[blkno] |= (1 << 2);
 
@@ -608,7 +608,7 @@ collect_corrupt_items(Oid relid, bool all_visible, bool all_frozen)
 									bstrategy);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(rel->rd_smgr,buffer);
 		maxoff = PageGetMaxOffsetNumber(page);
 
 		/*

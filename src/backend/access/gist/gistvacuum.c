@@ -301,7 +301,7 @@ restart:
 	 * exclusive lock.
 	 */
 	LockBuffer(buffer, GIST_EXCLUSIVE);
-	page = (Page) BufferGetPage(buffer);
+	page = (Page) BufferGetPage(rel->rd_smgr,buffer);
 
 	if (gistPageRecyclable(page))
 	{
@@ -493,7 +493,7 @@ gistvacuum_delete_empty_pages(IndexVacuumInfo *info, GistBulkDeleteResult *stats
 									RBM_NORMAL, info->strategy);
 
 		LockBuffer(buffer, GIST_SHARE);
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(rel->rd_smgr,buffer);
 
 		if (PageIsNew(page) || GistPageIsDeleted(page) || GistPageIsLeaf(page))
 		{
@@ -600,8 +600,8 @@ gistdeletepage(IndexVacuumInfo *info, GistBulkDeleteResult *stats,
 			   Buffer parentBuffer, OffsetNumber downlink,
 			   Buffer leafBuffer)
 {
-	Page		parentPage = BufferGetPage(parentBuffer);
-	Page		leafPage = BufferGetPage(leafBuffer);
+	Page		parentPage = BufferGetPage(info->index->rd_smgr,parentBuffer);
+	Page		leafPage = BufferGetPage(info->index->rd_smgr,leafBuffer);
 	ItemId		iid;
 	IndexTuple	idxtuple;
 	XLogRecPtr	recptr;

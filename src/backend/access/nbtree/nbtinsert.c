@@ -164,7 +164,7 @@ top:
 		{
 			_bt_checkpage(rel, buf);
 
-			page = BufferGetPage(buf);
+			page = BufferGetPage(rel->rd_smgr,buf);
 
 			lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
@@ -359,7 +359,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 
 	InitDirtySnapshot(SnapshotDirty);
 
-	page = BufferGetPage(insertstate->buf);
+	page = BufferGetPage(rel->rd_smgr,insertstate->buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	maxoff = PageGetMaxOffsetNumber(page);
 
@@ -613,7 +613,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 			{
 				nblkno = opaque->btpo_next;
 				nbuf = _bt_relandgetbuf(rel, nbuf, nblkno, BT_READ);
-				page = BufferGetPage(nbuf);
+				page = BufferGetPage(rel->rd_smgr,nbuf);
 				opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 				if (!P_IGNORE(opaque))
 					break;
@@ -687,7 +687,7 @@ _bt_findinsertloc(Relation rel,
 				  Relation heapRel)
 {
 	BTScanInsert itup_key = insertstate->itup_key;
-	Page		page = BufferGetPage(insertstate->buf);
+	Page		page = BufferGetPage(rel->rd_smgr,insertstate->buf);
 	BTPageOpaque lpageop;
 
 	lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -744,7 +744,7 @@ _bt_findinsertloc(Relation rel,
 
 				_bt_stepright(rel, insertstate, stack);
 				/* Update local state after stepping right */
-				page = BufferGetPage(insertstate->buf);
+				page = BufferGetPage(rel->rd_smgr,insertstate->buf);
 				lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
 			}
 		}
@@ -827,7 +827,7 @@ _bt_findinsertloc(Relation rel,
 
 			_bt_stepright(rel, insertstate, stack);
 			/* Update local state after stepping right */
-			page = BufferGetPage(insertstate->buf);
+			page = BufferGetPage(rel->rd_smgr,insertstate->buf);
 			lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
 		}
 	}
@@ -862,7 +862,7 @@ _bt_stepright(Relation rel, BTInsertState insertstate, BTStack stack)
 	Buffer		rbuf;
 	BlockNumber rblkno;
 
-	page = BufferGetPage(insertstate->buf);
+	page = BufferGetPage(rel->rd_smgr,insertstate->buf);
 	lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	rbuf = InvalidBuffer;
@@ -870,7 +870,7 @@ _bt_stepright(Relation rel, BTInsertState insertstate, BTStack stack)
 	for (;;)
 	{
 		rbuf = _bt_relandgetbuf(rel, rbuf, rblkno, BT_WRITE);
-		page = BufferGetPage(rbuf);
+		page = BufferGetPage(rel->rd_smgr,rbuf);
 		lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 		/*
@@ -942,7 +942,7 @@ _bt_insertonpg(Relation rel,
 	BTPageOpaque lpageop;
 	Size		itemsz;
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 	lpageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	/* child buffer must be given iff inserting on an internal page */
@@ -1045,7 +1045,7 @@ _bt_insertonpg(Relation rel,
 			Assert(!P_ISLEAF(lpageop));
 
 			metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_WRITE);
-			metapg = BufferGetPage(metabuf);
+			metapg = BufferGetPage(rel->rd_smgr,metabuf);
 			metad = BTPageGetMeta(metapg);
 
 			if (metad->btm_fastlevel >= lpageop->btpo.level)
@@ -1090,7 +1090,7 @@ _bt_insertonpg(Relation rel,
 		/* clear INCOMPLETE_SPLIT flag on child if inserting a downlink */
 		if (BufferIsValid(cbuf))
 		{
-			Page		cpage = BufferGetPage(cbuf);
+			Page		cpage = BufferGetPage(rel->rd_smgr,cbuf);
 			BTPageOpaque cpageop = (BTPageOpaque) PageGetSpecialPointer(cpage);
 
 			Assert(P_INCOMPLETE_SPLIT(cpageop));
@@ -1162,7 +1162,7 @@ _bt_insertonpg(Relation rel,
 			}
 			if (BufferIsValid(cbuf))
 			{
-				PageSetLSN(BufferGetPage(cbuf), recptr);
+				PageSetLSN(BufferGetPage(rel->rd_smgr,cbuf), recptr);
 			}
 
 			PageSetLSN(page, recptr);
@@ -1255,7 +1255,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 	 * consequences, since origpage won't have been modified and leftpage is
 	 * only workspace.
 	 */
-	origpage = BufferGetPage(buf);
+	origpage = BufferGetPage(rel->rd_smgr,buf);
 	oopaque = (BTPageOpaque) PageGetSpecialPointer(origpage);
 	origpagenumber = BufferGetBlockNumber(buf);
 
@@ -1414,7 +1414,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 	 * existing sibling page are corrupt.
 	 */
 	rbuf = _bt_getbuf(rel, P_NEW, BT_WRITE);
-	rightpage = BufferGetPage(rbuf);
+	rightpage = BufferGetPage(rel->rd_smgr,rbuf);
 	rightpagenumber = BufferGetBlockNumber(rbuf);
 	/* rightpage was initialized by _bt_getbuf */
 	ropaque = (BTPageOpaque) PageGetSpecialPointer(rightpage);
@@ -1563,7 +1563,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 	if (!P_RIGHTMOST(oopaque))
 	{
 		sbuf = _bt_getbuf(rel, oopaque->btpo_next, BT_WRITE);
-		spage = BufferGetPage(sbuf);
+		spage = BufferGetPage(rel->rd_smgr,sbuf);
 		sopaque = (BTPageOpaque) PageGetSpecialPointer(spage);
 		if (sopaque->btpo_prev != origpagenumber)
 		{
@@ -1633,7 +1633,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 	 */
 	if (!isleaf)
 	{
-		Page		cpage = BufferGetPage(cbuf);
+		Page		cpage = BufferGetPage(rel->rd_smgr,cbuf);
 		BTPageOpaque cpageop = (BTPageOpaque) PageGetSpecialPointer(cpage);
 
 		cpageop->btpo_flags &= ~BTP_INCOMPLETE_SPLIT;
@@ -1704,7 +1704,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 		}
 		if (!isleaf)
 		{
-			PageSetLSN(BufferGetPage(cbuf), recptr);
+			PageSetLSN(BufferGetPage(rel->rd_smgr,cbuf), recptr);
 		}
 	}
 
@@ -1776,7 +1776,7 @@ _bt_insert_parent(Relation rel,
 	{
 		BlockNumber bknum = BufferGetBlockNumber(buf);
 		BlockNumber rbknum = BufferGetBlockNumber(rbuf);
-		Page		page = BufferGetPage(buf);
+		Page		page = BufferGetPage(rel->rd_smgr,buf);
 		IndexTuple	new_item;
 		BTStackData fakestack;
 		IndexTuple	ritem;
@@ -1853,7 +1853,7 @@ _bt_insert_parent(Relation rel,
 void
 _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
 {
-	Page		lpage = BufferGetPage(lbuf);
+	Page		lpage = BufferGetPage(rel->rd_smgr,lbuf);
 	BTPageOpaque lpageop = (BTPageOpaque) PageGetSpecialPointer(lpage);
 	Buffer		rbuf;
 	Page		rpage;
@@ -1865,7 +1865,7 @@ _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
 
 	/* Lock right sibling, the one missing the downlink */
 	rbuf = _bt_getbuf(rel, lpageop->btpo_next, BT_WRITE);
-	rpage = BufferGetPage(rbuf);
+	rpage = BufferGetPage(rel->rd_smgr,rbuf);
 	rpageop = (BTPageOpaque) PageGetSpecialPointer(rpage);
 
 	/* Could this be a root split? */
@@ -1877,7 +1877,7 @@ _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack)
 
 		/* acquire lock on the metapage */
 		metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_WRITE);
-		metapg = BufferGetPage(metabuf);
+		metapg = BufferGetPage(rel->rd_smgr,metabuf);
 		metad = BTPageGetMeta(metapg);
 
 		was_root = (metad->btm_root == BufferGetBlockNumber(lbuf));
@@ -1926,7 +1926,7 @@ _bt_getstackbuf(Relation rel, BTStack stack)
 		BTPageOpaque opaque;
 
 		buf = _bt_getbuf(rel, blkno, BT_WRITE);
-		page = BufferGetPage(buf);
+		page = BufferGetPage(rel->rd_smgr,buf);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
 		if (P_INCOMPLETE_SPLIT(opaque))
@@ -2054,17 +2054,17 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 
 	lbkno = BufferGetBlockNumber(lbuf);
 	rbkno = BufferGetBlockNumber(rbuf);
-	lpage = BufferGetPage(lbuf);
+	lpage = BufferGetPage(rel->rd_smgr,lbuf);
 	lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
 
 	/* get a new root page */
 	rootbuf = _bt_getbuf(rel, P_NEW, BT_WRITE);
-	rootpage = BufferGetPage(rootbuf);
+	rootpage = BufferGetPage(rel->rd_smgr,rootbuf);
 	rootblknum = BufferGetBlockNumber(rootbuf);
 
 	/* acquire lock on the metapage */
 	metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_WRITE);
-	metapg = BufferGetPage(metabuf);
+	metapg = BufferGetPage(rel->rd_smgr,metabuf);
 	metad = BTPageGetMeta(metapg);
 
 	/*
@@ -2255,7 +2255,7 @@ _bt_vacuum_one_page(Relation rel, Buffer buffer, Relation heapRel)
 	OffsetNumber offnum,
 				minoff,
 				maxoff;
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(rel->rd_smgr,buffer);
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
 	Assert(P_ISLEAF(opaque));

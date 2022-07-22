@@ -101,6 +101,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	params.truncate = VACOPT_TERNARY_DEFAULT;
 
 	/* Parse options list */
+
 	foreach(lc, vacstmt->options)
 	{
 		DefElem    *opt = (DefElem *) lfirst(lc);

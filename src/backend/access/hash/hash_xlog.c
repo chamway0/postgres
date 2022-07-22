@@ -41,7 +41,7 @@ hash_xlog_init_meta_page(XLogReaderState *record)
 	Assert(BufferIsValid(metabuf));
 	_hash_init_metabuffer(metabuf, xlrec->num_tuples, xlrec->procid,
 						  xlrec->ffactor, true);
-	page = (Page) BufferGetPage(metabuf);
+	page = (Page) BufferGetPage(NULL,metabuf);
 	PageSetLSN(page, lsn);
 	MarkBufferDirty(metabuf);
 
@@ -80,7 +80,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 	 */
 	bitmapbuf = XLogInitBufferForRedo(record, 0);
 	_hash_initbitmapbuffer(bitmapbuf, xlrec->bmsize, true);
-	PageSetLSN(BufferGetPage(bitmapbuf), lsn);
+	PageSetLSN(BufferGetPage(NULL,bitmapbuf), lsn);
 	MarkBufferDirty(bitmapbuf);
 
 	/*
@@ -103,7 +103,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 		 * necessary to hold that lock, since nobody can see it yet; the
 		 * creating transaction hasn't yet committed.
 		 */
-		page = BufferGetPage(metabuf);
+		page = BufferGetPage(NULL,metabuf);
 		metap = HashPageGetMeta(page);
 
 		num_buckets = metap->hashm_maxbucket + 1;
@@ -138,7 +138,7 @@ hash_xlog_insert(XLogReaderState *record)
 		Size		datalen;
 		char	   *datapos = XLogRecGetBlockData(record, 0, &datalen);
 
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(NULL,buffer);
 
 		if (PageAddItem(page, (Item) datapos, datalen, xlrec->offnum,
 						false, false) == InvalidOffsetNumber)
@@ -158,7 +158,7 @@ hash_xlog_insert(XLogReaderState *record)
 		 * not necessary to hold that lock, since no other index updates can
 		 * be happening concurrently.
 		 */
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(NULL,buffer);
 		metap = HashPageGetMeta(page);
 		metap->hashm_ntuples += 1;
 
@@ -202,7 +202,7 @@ hash_xlog_add_ovfl_page(XLogReaderState *record)
 	_hash_initbuf(ovflbuf, InvalidBlockNumber, *num_bucket, LH_OVERFLOW_PAGE,
 				  true);
 	/* update backlink */
-	ovflpage = BufferGetPage(ovflbuf);
+	ovflpage = BufferGetPage(NULL,ovflbuf);
 	ovflopaque = (HashPageOpaque) PageGetSpecialPointer(ovflpage);
 	ovflopaque->hasho_prevblkno = leftblk;
 
@@ -214,7 +214,7 @@ hash_xlog_add_ovfl_page(XLogReaderState *record)
 		Page		leftpage;
 		HashPageOpaque leftopaque;
 
-		leftpage = BufferGetPage(leftbuf);
+		leftpage = BufferGetPage(NULL,leftbuf);
 		leftopaque = (HashPageOpaque) PageGetSpecialPointer(leftpage);
 		leftopaque->hasho_nextblkno = rightblk;
 
@@ -238,7 +238,7 @@ hash_xlog_add_ovfl_page(XLogReaderState *record)
 
 		if (XLogReadBufferForRedo(record, 2, &mapbuffer) == BLK_NEEDS_REDO)
 		{
-			Page		mappage = (Page) BufferGetPage(mapbuffer);
+			Page		mappage = (Page) BufferGetPage(NULL,mapbuffer);
 			uint32	   *freep = NULL;
 			char	   *data;
 			uint32	   *bitmap_page_bit;
@@ -269,7 +269,7 @@ hash_xlog_add_ovfl_page(XLogReaderState *record)
 		newmapblk = BufferGetBlockNumber(newmapbuf);
 
 		MarkBufferDirty(newmapbuf);
-		PageSetLSN(BufferGetPage(newmapbuf), lsn);
+		PageSetLSN(BufferGetPage(NULL,newmapbuf), lsn);
 
 		UnlockReleaseBuffer(newmapbuf);
 	}
@@ -283,7 +283,7 @@ hash_xlog_add_ovfl_page(XLogReaderState *record)
 		data = XLogRecGetBlockData(record, 4, &datalen);
 		firstfree_ovflpage = (uint32 *) data;
 
-		page = BufferGetPage(metabuf);
+		page = BufferGetPage(NULL,metabuf);
 		metap = HashPageGetMeta(page);
 		metap->hashm_firstfree = *firstfree_ovflpage;
 
@@ -341,7 +341,7 @@ hash_xlog_split_allocate_page(XLogReaderState *record)
 		Page		oldpage;
 		HashPageOpaque oldopaque;
 
-		oldpage = BufferGetPage(oldbuf);
+		oldpage = BufferGetPage(NULL,oldbuf);
 		oldopaque = (HashPageOpaque) PageGetSpecialPointer(oldpage);
 
 		oldopaque->hasho_flag = xlrec->old_bucket_flag;
@@ -358,7 +358,7 @@ hash_xlog_split_allocate_page(XLogReaderState *record)
 	if (!IsBufferCleanupOK(newbuf))
 		elog(PANIC, "hash_xlog_split_allocate_page: failed to acquire cleanup lock");
 	MarkBufferDirty(newbuf);
-	PageSetLSN(BufferGetPage(newbuf), lsn);
+	PageSetLSN(BufferGetPage(NULL,newbuf), lsn);
 
 	/*
 	 * We can release the lock on old bucket early as well but doing here to
@@ -382,7 +382,7 @@ hash_xlog_split_allocate_page(XLogReaderState *record)
 		Page		page;
 		HashMetaPage metap;
 
-		page = BufferGetPage(metabuf);
+		page = BufferGetPage(NULL,metabuf);
 		metap = HashPageGetMeta(page);
 		metap->hashm_maxbucket = xlrec->new_bucket;
 
@@ -419,7 +419,7 @@ hash_xlog_split_allocate_page(XLogReaderState *record)
 		}
 
 		MarkBufferDirty(metabuf);
-		PageSetLSN(BufferGetPage(metabuf), lsn);
+		PageSetLSN(BufferGetPage(NULL,metabuf), lsn);
 	}
 
 	if (BufferIsValid(metabuf))
@@ -464,7 +464,7 @@ hash_xlog_split_complete(XLogReaderState *record)
 		Page		oldpage;
 		HashPageOpaque oldopaque;
 
-		oldpage = BufferGetPage(oldbuf);
+		oldpage = BufferGetPage(NULL,oldbuf);
 		oldopaque = (HashPageOpaque) PageGetSpecialPointer(oldpage);
 
 		oldopaque->hasho_flag = xlrec->old_bucket_flag;
@@ -487,7 +487,7 @@ hash_xlog_split_complete(XLogReaderState *record)
 		Page		newpage;
 		HashPageOpaque nopaque;
 
-		newpage = BufferGetPage(newbuf);
+		newpage = BufferGetPage(NULL,newbuf);
 		nopaque = (HashPageOpaque) PageGetSpecialPointer(newpage);
 
 		nopaque->hasho_flag = xlrec->new_bucket_flag;
@@ -543,7 +543,7 @@ hash_xlog_move_page_contents(XLogReaderState *record)
 
 		data = begin = XLogRecGetBlockData(record, 1, &datalen);
 
-		writepage = (Page) BufferGetPage(writebuf);
+		writepage = (Page) BufferGetPage(NULL,writebuf);
 
 		if (xldata->ntups > 0)
 		{
@@ -589,7 +589,7 @@ hash_xlog_move_page_contents(XLogReaderState *record)
 
 		ptr = XLogRecGetBlockData(record, 2, &len);
 
-		page = (Page) BufferGetPage(deletebuf);
+		page = (Page) BufferGetPage(NULL,deletebuf);
 
 		if (len > 0)
 		{
@@ -671,7 +671,7 @@ hash_xlog_squeeze_page(XLogReaderState *record)
 
 		data = begin = XLogRecGetBlockData(record, 1, &datalen);
 
-		writepage = (Page) BufferGetPage(writebuf);
+		writepage = (Page) BufferGetPage(NULL,writebuf);
 
 		if (xldata->ntups > 0)
 		{
@@ -725,7 +725,7 @@ hash_xlog_squeeze_page(XLogReaderState *record)
 		Page		ovflpage;
 		HashPageOpaque ovflopaque;
 
-		ovflpage = BufferGetPage(ovflbuf);
+		ovflpage = BufferGetPage(NULL,ovflbuf);
 
 		_hash_pageinit(ovflpage, BufferGetPageSize(ovflbuf));
 
@@ -747,7 +747,7 @@ hash_xlog_squeeze_page(XLogReaderState *record)
 	if (!xldata->is_prev_bucket_same_wrt &&
 		XLogReadBufferForRedo(record, 3, &prevbuf) == BLK_NEEDS_REDO)
 	{
-		Page		prevpage = BufferGetPage(prevbuf);
+		Page		prevpage = BufferGetPage(NULL,prevbuf);
 		HashPageOpaque prevopaque = (HashPageOpaque) PageGetSpecialPointer(prevpage);
 
 		prevopaque->hasho_nextblkno = xldata->nextblkno;
@@ -765,7 +765,7 @@ hash_xlog_squeeze_page(XLogReaderState *record)
 
 		if (XLogReadBufferForRedo(record, 4, &nextbuf) == BLK_NEEDS_REDO)
 		{
-			Page		nextpage = BufferGetPage(nextbuf);
+			Page		nextpage = BufferGetPage(NULL,nextbuf);
 			HashPageOpaque nextopaque = (HashPageOpaque) PageGetSpecialPointer(nextpage);
 
 			nextopaque->hasho_prevblkno = xldata->prevblkno;
@@ -792,7 +792,7 @@ hash_xlog_squeeze_page(XLogReaderState *record)
 	/* replay the record for bitmap page */
 	if (XLogReadBufferForRedo(record, 5, &mapbuf) == BLK_NEEDS_REDO)
 	{
-		Page		mappage = (Page) BufferGetPage(mapbuf);
+		Page		mappage = (Page) BufferGetPage(NULL,mapbuf);
 		uint32	   *freep = NULL;
 		char	   *data;
 		uint32	   *bitmap_page_bit;
@@ -827,7 +827,7 @@ hash_xlog_squeeze_page(XLogReaderState *record)
 			data = XLogRecGetBlockData(record, 6, &datalen);
 			firstfree_ovflpage = (uint32 *) data;
 
-			page = BufferGetPage(metabuf);
+			page = BufferGetPage(NULL,metabuf);
 			metap = HashPageGetMeta(page);
 			metap->hashm_firstfree = *firstfree_ovflpage;
 
@@ -880,7 +880,7 @@ hash_xlog_delete(XLogReaderState *record)
 
 		ptr = XLogRecGetBlockData(record, 1, &len);
 
-		page = (Page) BufferGetPage(deletebuf);
+		page = (Page) BufferGetPage(NULL,deletebuf);
 
 		if (len > 0)
 		{
@@ -931,7 +931,7 @@ hash_xlog_split_cleanup(XLogReaderState *record)
 	{
 		HashPageOpaque bucket_opaque;
 
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 
 		bucket_opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 		bucket_opaque->hasho_flag &= ~LH_BUCKET_NEEDS_SPLIT_CLEANUP;
@@ -956,7 +956,7 @@ hash_xlog_update_meta_page(XLogReaderState *record)
 
 	if (XLogReadBufferForRedo(record, 0, &metabuf) == BLK_NEEDS_REDO)
 	{
-		page = BufferGetPage(metabuf);
+		page = BufferGetPage(NULL,metabuf);
 		metap = HashPageGetMeta(page);
 
 		metap->hashm_ntuples = xldata->ntuples;
@@ -1009,7 +1009,7 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 
 	if (action == BLK_NEEDS_REDO)
 	{
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 
 		if (XLogRecGetDataLen(record) > SizeOfHashVacuumOnePage)
 		{
@@ -1038,7 +1038,7 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 		Page		metapage;
 		HashMetaPage metap;
 
-		metapage = BufferGetPage(metabuf);
+		metapage = BufferGetPage(NULL,metabuf);
 		metap = HashPageGetMeta(metapage);
 
 		metap->hashm_ntuples -= xldata->ntuples;

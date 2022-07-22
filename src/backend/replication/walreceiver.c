@@ -61,6 +61,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/ipc.h"
+#include "storage/pmem.h"
 #include "storage/pmsignal.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
@@ -91,6 +92,7 @@ static int	recvFile = -1;
 static TimeLineID recvFileTLI = 0;
 static XLogSegNo recvSegNo = 0;
 static uint32 recvOff = 0;
+void	   *mappedFileAddr = NULL;
 
 /*
  * Flags set by interrupt handlers of walreceiver for later service in the
@@ -572,12 +574,12 @@ WalReceiverMain(void)
 		 * End of WAL reached on the requested timeline. Close the last
 		 * segment, and await for new orders from the startup process.
 		 */
-		if (recvFile >= 0)
+		if (recvFile >= 0 || mappedFileAddr != NULL)
 		{
 			char		xlogfname[MAXFNAMELEN];
 
 			XLogWalRcvFlush(false);
-			if (close(recvFile) != 0)
+			if (do_XLogFileClose(recvFile, mappedFileAddr) != 0)
 				ereport(PANIC,
 						(errcode_for_file_access(),
 						 errmsg("could not close log segment %s: %m",
@@ -594,6 +596,7 @@ WalReceiverMain(void)
 				XLogArchiveNotify(xlogfname);
 		}
 		recvFile = -1;
+		mappedFileAddr = NULL;
 
 		elog(DEBUG1, "walreceiver ended streaming and awaits new instructions");
 		WalRcvWaitForStartPosition(&startpoint, &startpointTLI);
@@ -908,16 +911,17 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 		int			segbytes;
 
 		/* Close the current segment if it's completed */
-		if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
+		if ( (recvFile >= 0 || mappedFileAddr != NULL) && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
 			XLogWalRcvClose(recptr);
 
-		if (recvFile < 0)
+		if ((recvFile < 0 && mappedFileAddr == NULL) ||
+			!XLByteInSeg(recptr, recvSegNo, wal_segment_size))
 		{
 			bool		use_existent = true;
 
 			/* Create/use new log file */
 			XLByteToSeg(recptr, recvSegNo, wal_segment_size);
-			recvFile = XLogFileInit(recvSegNo, &use_existent, true);
+			recvFile = XLogFileInit(recvSegNo, &use_existent, true, &mappedFileAddr);
 			recvFileTLI = ThisTimeLineID;
 			recvOff = 0;
 		}
@@ -930,34 +934,44 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 		else
 			segbytes = nbytes;
 
-		/* Need to seek in the file? */
-		if (recvOff != startoff)
+		if (mappedFileAddr)
 		{
-			if (lseek(recvFile, (off_t) startoff, SEEK_SET) < 0)
+			PmemFileWrite((char *) mappedFileAddr + startoff, buf, segbytes);
+			byteswritten = segbytes;
+		}
+		else
+		{
+			/* Need to seek in the file? */
+			if (recvOff != startoff)
+			{
+				if (lseek(recvFile, (off_t) startoff, SEEK_SET) < 0)
+					ereport(PANIC,
+							(errcode_for_file_access(),
+							errmsg("could not seek in log segment %s to offset %u: %m",
+									XLogFileNameP(recvFileTLI, recvSegNo),
+									startoff)));
+				recvOff = startoff;
+			}
+
+			/* OK to write the logs */
+			errno = 0;
+
+			byteswritten = write(recvFile, buf, segbytes);
+			if (byteswritten <= 0)
+			{
+				/* if write didn't set errno, assume no disk space */
+				if (errno == 0)
+					errno = ENOSPC;
 				ereport(PANIC,
 						(errcode_for_file_access(),
-						 errmsg("could not seek in log segment %s to offset %u: %m",
+						errmsg("could not write to log segment %s "
+								"at offset %u, length %lu: %m",
 								XLogFileNameP(recvFileTLI, recvSegNo),
-								startoff)));
-			recvOff = startoff;
+								recvOff, (unsigned long) segbytes)));
+			}			
 		}
 
-		/* OK to write the logs */
-		errno = 0;
 
-		byteswritten = write(recvFile, buf, segbytes);
-		if (byteswritten <= 0)
-		{
-			/* if write didn't set errno, assume no disk space */
-			if (errno == 0)
-				errno = ENOSPC;
-			ereport(PANIC,
-					(errcode_for_file_access(),
-					 errmsg("could not write to log segment %s "
-							"at offset %u, length %lu: %m",
-							XLogFileNameP(recvFileTLI, recvSegNo),
-							recvOff, (unsigned long) segbytes)));
-		}
 
 		/* Update state for write */
 		recptr += byteswritten;
@@ -975,7 +989,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 	 * archiving of the segment will be delayed until any data in the next
 	 * segment is received and written.
 	 */
-	if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
+	if ((recvFile >= 0 || mappedFileAddr != NULL) && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
 		XLogWalRcvClose(recptr);
 }
 
@@ -1044,7 +1058,7 @@ XLogWalRcvClose(XLogRecPtr recptr)
 {
 	char		xlogfname[MAXFNAMELEN];
 
-	Assert(recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size));
+	Assert((recvFile >= 0 || mappedFileAddr != NULL) && !XLByteInSeg(recptr, recvSegNo, wal_segment_size));
 
 	/*
 	 * fsync() and close current file before we switch to next one. We would
@@ -1059,7 +1073,7 @@ XLogWalRcvClose(XLogRecPtr recptr)
 	 * so we don't advise the OS to release cache pages associated with the
 	 * file like XLogFileClose() does.
 	 */
-	if (close(recvFile) != 0)
+	if (do_XLogFileClose(recvFile, mappedFileAddr) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not close log segment %s: %m",
@@ -1075,6 +1089,7 @@ XLogWalRcvClose(XLogRecPtr recptr)
 		XLogArchiveNotify(xlogfname);
 
 	recvFile = -1;
+	mappedFileAddr = NULL;
 }
 
 /*

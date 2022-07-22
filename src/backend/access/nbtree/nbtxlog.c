@@ -95,7 +95,7 @@ _bt_restore_meta(XLogReaderState *record, uint8 block_id)
 	Assert(len == sizeof(xl_btree_metadata));
 	Assert(BufferGetBlockNumber(metabuf) == BTREE_METAPAGE);
 	xlrec = (xl_btree_metadata *) ptr;
-	metapg = BufferGetPage(metabuf);
+	metapg = BufferGetPage(NULL,metabuf);
 
 	_bt_pageinit(metapg, BufferGetPageSize(metabuf));
 
@@ -141,7 +141,7 @@ _bt_clear_incomplete_split(XLogReaderState *record, uint8 block_id)
 
 	if (XLogReadBufferForRedo(record, block_id, &buf) == BLK_NEEDS_REDO)
 	{
-		Page		page = (Page) BufferGetPage(buf);
+		Page		page = (Page) BufferGetPage(NULL,buf);
 		BTPageOpaque pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 		Assert(P_INCOMPLETE_SPLIT(pageop));
@@ -178,7 +178,7 @@ btree_xlog_insert(bool isleaf, bool ismeta, XLogReaderState *record)
 		Size		datalen;
 		char	   *datapos = XLogRecGetBlockData(record, 0, &datalen);
 
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(NULL,buffer);
 
 		if (PageAddItem(page, (Item) datapos, datalen, xlrec->offnum,
 						false, false) == InvalidOffsetNumber)
@@ -233,7 +233,7 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 	/* Reconstruct right (new) sibling page from scratch */
 	rbuf = XLogInitBufferForRedo(record, 1);
 	datapos = XLogRecGetBlockData(record, 1, &datalen);
-	rpage = (Page) BufferGetPage(rbuf);
+	rpage = (Page) BufferGetPage(NULL,rbuf);
 
 	_bt_pageinit(rpage, BufferGetPageSize(rbuf));
 	ropaque = (BTPageOpaque) PageGetSpecialPointer(rpage);
@@ -260,7 +260,7 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 		 * checking possible.  See also _bt_restore_page(), which does the
 		 * same for the right page.
 		 */
-		Page		lpage = (Page) BufferGetPage(lbuf);
+		Page		lpage = (Page) BufferGetPage(NULL,lbuf);
 		BTPageOpaque lopaque = (BTPageOpaque) PageGetSpecialPointer(lpage);
 		OffsetNumber off;
 		IndexTuple	newitem = NULL,
@@ -365,7 +365,7 @@ btree_xlog_split(bool onleft, XLogReaderState *record)
 
 		if (XLogReadBufferForRedo(record, 2, &buffer) == BLK_NEEDS_REDO)
 		{
-			Page		page = (Page) BufferGetPage(buffer);
+			Page		page = (Page) BufferGetPage(NULL,buffer);
 			BTPageOpaque pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 			pageop->btpo_prev = rightsib;
@@ -473,7 +473,7 @@ btree_xlog_vacuum(XLogReaderState *record)
 
 		ptr = XLogRecGetBlockData(record, 0, &len);
 
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 
 		if (len > 0)
 		{
@@ -536,7 +536,7 @@ btree_xlog_delete(XLogReaderState *record)
 	 */
 	if (XLogReadBufferForRedo(record, 0, &buffer) == BLK_NEEDS_REDO)
 	{
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 
 		if (XLogRecGetDataLen(record) > SizeOfBtreeDelete)
 		{
@@ -588,7 +588,7 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 		OffsetNumber nextoffset;
 		BlockNumber rightsib;
 
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 		pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 
 		poffset = xlrec->poffset;
@@ -612,7 +612,7 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 
 	/* Rewrite the leaf page as a halfdead page */
 	buffer = XLogInitBufferForRedo(record, 0);
-	page = (Page) BufferGetPage(buffer);
+	page = (Page) BufferGetPage(NULL,buffer);
 
 	_bt_pageinit(page, BufferGetPageSize(buffer));
 	pageop = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -666,7 +666,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 	/* Fix left-link of right sibling */
 	if (XLogReadBufferForRedo(record, 2, &buffer) == BLK_NEEDS_REDO)
 	{
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 		pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 		pageop->btpo_prev = leftsib;
 
@@ -681,7 +681,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 	{
 		if (XLogReadBufferForRedo(record, 1, &buffer) == BLK_NEEDS_REDO)
 		{
-			page = (Page) BufferGetPage(buffer);
+			page = (Page) BufferGetPage(NULL,buffer);
 			pageop = (BTPageOpaque) PageGetSpecialPointer(page);
 			pageop->btpo_next = rightsib;
 
@@ -694,7 +694,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 
 	/* Rewrite target page as empty deleted page */
 	buffer = XLogInitBufferForRedo(record, 0);
-	page = (Page) BufferGetPage(buffer);
+	page = (Page) BufferGetPage(NULL,buffer);
 
 	_bt_pageinit(page, BufferGetPageSize(buffer));
 	pageop = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -723,7 +723,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 		IndexTupleData trunctuple;
 
 		buffer = XLogInitBufferForRedo(record, 3);
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 
 		_bt_pageinit(page, BufferGetPageSize(buffer));
 		pageop = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -765,7 +765,7 @@ btree_xlog_newroot(XLogReaderState *record)
 	Size		len;
 
 	buffer = XLogInitBufferForRedo(record, 0);
-	page = (Page) BufferGetPage(buffer);
+	page = (Page) BufferGetPage(NULL,buffer);
 
 	_bt_pageinit(page, BufferGetPageSize(buffer));
 	pageop = (BTPageOpaque) PageGetSpecialPointer(page);

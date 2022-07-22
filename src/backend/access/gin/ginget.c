@@ -41,7 +41,7 @@ typedef struct pendingPosition
 static bool
 moveRightIfItNeeded(GinBtreeData *btree, GinBtreeStack *stack, Snapshot snapshot)
 {
-	Page		page = BufferGetPage(stack->buffer);
+	Page		page = BufferGetPage(btree->index->rd_smgr,stack->buffer);
 
 	if (stack->off > PageGetMaxOffsetNumber(page))
 	{
@@ -86,7 +86,7 @@ scanPostingTree(Relation index, GinScanEntry scanEntry,
 	 */
 	for (;;)
 	{
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(NULL,buffer);
 		if ((GinPageGetOpaque(page)->flags & GIN_DELETED) == 0)
 		{
 			int			n = GinDataLeafPageGetItemsToTbm(page, scanEntry->matchBitmap);
@@ -154,7 +154,7 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 		if (moveRightIfItNeeded(btree, stack, snapshot) == false)
 			return true;
 
-		page = BufferGetPage(stack->buffer);
+		page = BufferGetPage(btree->index->rd_smgr,stack->buffer);
 		TestForOldSnapshot(snapshot, btree->index, page);
 		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, stack->off));
 
@@ -250,7 +250,7 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 			 * might have occurred, so we need to re-find our position.
 			 */
 			LockBuffer(stack->buffer, GIN_SHARE);
-			page = BufferGetPage(stack->buffer);
+			page = BufferGetPage(btree->index->rd_smgr,stack->buffer);
 			if (!GinPageIsLeaf(page))
 			{
 				/*
@@ -270,7 +270,7 @@ collectMatchBitmap(GinBtreeData *btree, GinBtreeStack *stack,
 							 errmsg("failed to re-find tuple within index \"%s\"",
 									RelationGetRelationName(btree->index))));
 
-				page = BufferGetPage(stack->buffer);
+				page = BufferGetPage(btree->index->rd_smgr,stack->buffer);
 				itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, stack->off));
 
 				if (gintuple_get_attrnum(btree->ginstate, itup) == attnum)
@@ -343,7 +343,7 @@ restartScanEntry:
 						entry->queryKey, entry->queryCategory,
 						ginstate);
 	stackEntry = ginFindLeafPage(&btreeEntry, true, false, snapshot);
-	page = BufferGetPage(stackEntry->buffer);
+	page = BufferGetPage(btreeEntry.index->rd_smgr,stackEntry->buffer);
 
 	/* ginFindLeafPage() will have already checked snapshot age. */
 	needUnlock = true;
@@ -427,7 +427,7 @@ restartScanEntry:
 			 */
 			IncrBufferRefCount(entry->buffer);
 
-			page = BufferGetPage(entry->buffer);
+			page = BufferGetPage(entry->btree.index->rd_smgr,entry->buffer);
 
 			/*
 			 * Load the first page into memory.
@@ -697,7 +697,7 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 		 GinItemPointerGetOffsetNumber(&advancePast),
 		 !stepright);
 
-	page = BufferGetPage(entry->buffer);
+	page = BufferGetPage(entry->btree.index->rd_smgr,entry->buffer);
 	for (;;)
 	{
 		entry->offset = InvalidOffsetNumber;
@@ -729,7 +729,7 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 			entry->buffer = ginStepRight(entry->buffer,
 										 ginstate->index,
 										 GIN_SHARE);
-			page = BufferGetPage(entry->buffer);
+			page = BufferGetPage(entry->btree.index->rd_smgr,entry->buffer);
 		}
 		stepright = true;
 
@@ -1415,7 +1415,7 @@ scanGetCandidate(IndexScanDesc scan, pendingPosition *pos)
 	ItemPointerSetInvalid(&pos->item);
 	for (;;)
 	{
-		page = BufferGetPage(pos->pendingBuffer);
+		page = BufferGetPage(scan->indexRelation->rd_smgr,pos->pendingBuffer);
 		TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
 
 		maxoff = PageGetMaxOffsetNumber(page);
@@ -1596,7 +1596,7 @@ collectMatchesForHeapRow(IndexScanDesc scan, pendingPosition *pos)
 		memset(datumExtracted + pos->firstOffset - 1, 0,
 			   sizeof(bool) * (pos->lastOffset - pos->firstOffset));
 
-		page = BufferGetPage(pos->pendingBuffer);
+		page = BufferGetPage(scan->indexRelation->rd_smgr,pos->pendingBuffer);
 		TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
 
 		for (i = 0; i < so->nkeys; i++)
@@ -1796,7 +1796,7 @@ scanPendingInsert(IndexScanDesc scan, TIDBitmap *tbm, int64 *ntids)
 	PredicateLockPage(scan->indexRelation, GIN_METAPAGE_BLKNO, scan->xs_snapshot);
 
 	LockBuffer(metabuffer, GIN_SHARE);
-	page = BufferGetPage(metabuffer);
+	page = BufferGetPage(scan->indexRelation->rd_smgr,metabuffer);
 	TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
 	blkno = GinPageGetMeta(page)->head;
 

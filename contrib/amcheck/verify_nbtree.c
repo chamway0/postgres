@@ -2120,7 +2120,7 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 		/* Get matching tuple on leaf page */
 		offnum = _bt_binsrch_insert(state->rel, &insertstate);
 		/* Compare first >= matching item on leaf page, if any */
-		page = BufferGetPage(lbuf);
+		page = BufferGetPage(state->rel->rd_smgr,lbuf);
 		if (offnum <= PageGetMaxOffsetNumber(page) &&
 			_bt_compare(state->rel, key, page, offnum) == 0)
 			exists = true;
@@ -2383,7 +2383,7 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	_bt_checkpage(state->rel, buffer);
 
 	/* Only use copy of page in palloc()'d memory */
-	memcpy(page, BufferGetPage(buffer), BLCKSZ);
+	memcpy(page, BufferGetPage(state->rel->rd_smgr,buffer), BLCKSZ);
 	UnlockReleaseBuffer(buffer);
 
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);

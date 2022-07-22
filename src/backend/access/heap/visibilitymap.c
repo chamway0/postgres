@@ -154,7 +154,7 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer buf, uint8 flags)
 		elog(ERROR, "wrong buffer passed to visibilitymap_clear");
 
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-	map = PageGetContents(BufferGetPage(buf));
+	map = PageGetContents(BufferGetPage(rel->rd_smgr,buf));
 
 	if (map[mapByte] & mask)
 	{
@@ -265,7 +265,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	if (!BufferIsValid(vmBuf) || BufferGetBlockNumber(vmBuf) != mapBlock)
 		elog(ERROR, "wrong VM buffer passed to visibilitymap_set");
 
-	page = BufferGetPage(vmBuf);
+	page = BufferGetPage(rel->rd_smgr,vmBuf);
 	map = (uint8 *) PageGetContents(page);
 	LockBuffer(vmBuf, BUFFER_LOCK_EXCLUSIVE);
 
@@ -290,7 +290,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 				 */
 				if (XLogHintBitIsNeeded())
 				{
-					Page		heapPage = BufferGetPage(heapBuf);
+					Page		heapPage = BufferGetPage(rel->rd_smgr,heapBuf);
 
 					/* caller is expected to set PD_ALL_VISIBLE first */
 					Assert(PageIsAllVisible(heapPage));
@@ -355,7 +355,7 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *buf)
 			return false;
 	}
 
-	map = PageGetContents(BufferGetPage(*buf));
+	map = PageGetContents(BufferGetPage(rel->rd_smgr,*buf));
 
 	/*
 	 * A single byte read is atomic.  There could be memory-ordering effects
@@ -403,7 +403,7 @@ visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_fro
 		 * immediately stale anyway if anyone is concurrently setting or
 		 * clearing bits, and we only really need an approximate value.
 		 */
-		map = (uint64 *) PageGetContents(BufferGetPage(mapBuffer));
+		map = (uint64 *) PageGetContents(BufferGetPage(rel->rd_smgr,mapBuffer));
 
 		StaticAssertStmt(MAPSIZE % sizeof(uint64) == 0,
 						 "unsupported MAPSIZE");
@@ -483,7 +483,7 @@ visibilitymap_truncate(Relation rel, BlockNumber nheapblocks)
 			return;
 		}
 
-		page = BufferGetPage(mapBuffer);
+		page = BufferGetPage(rel->rd_smgr,mapBuffer);
 		map = PageGetContents(page);
 
 		LockBuffer(mapBuffer, BUFFER_LOCK_EXCLUSIVE);
@@ -607,11 +607,11 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	 */
 	buf = ReadBufferExtended(rel, VISIBILITYMAP_FORKNUM, blkno,
 							 RBM_ZERO_ON_ERROR, NULL);
-	if (PageIsNew(BufferGetPage(buf)))
+	if (PageIsNew(BufferGetPage(rel->rd_smgr,buf)))
 	{
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-		if (PageIsNew(BufferGetPage(buf)))
-			PageInit(BufferGetPage(buf), BLCKSZ, 0);
+		if (PageIsNew(BufferGetPage(rel->rd_smgr,buf)))
+			PageInit(BufferGetPage(rel->rd_smgr,buf), BLCKSZ, 0);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	}
 	return buf;

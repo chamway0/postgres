@@ -48,7 +48,7 @@ RelationPutHeapTuple(Relation relation,
 	Assert(!token || HeapTupleHeaderIsSpeculative(tuple->t_data));
 
 	/* Add the tuple to the page */
-	pageHeader = BufferGetPage(buffer);
+	pageHeader = BufferGetPage(relation->rd_smgr,buffer);
 
 	offnum = PageAddItem(pageHeader, (Item) tuple->t_data,
 						 tuple->t_len, InvalidOffsetNumber, false, true);
@@ -140,10 +140,10 @@ GetVisibilityMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
 	while (1)
 	{
 		/* Figure out which pins we need but don't have. */
-		need_to_pin_buffer1 = PageIsAllVisible(BufferGetPage(buffer1))
+		need_to_pin_buffer1 = PageIsAllVisible(BufferGetPage(relation->rd_smgr,buffer1))
 			&& !visibilitymap_pin_ok(block1, *vmbuffer1);
 		need_to_pin_buffer2 = buffer2 != InvalidBuffer
-			&& PageIsAllVisible(BufferGetPage(buffer2))
+			&& PageIsAllVisible(BufferGetPage(relation->rd_smgr,buffer2))
 			&& !visibilitymap_pin_ok(block2, *vmbuffer2);
 		if (!need_to_pin_buffer1 && !need_to_pin_buffer2)
 			return;
@@ -216,7 +216,7 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 		 * initialize the page (see below).
 		 */
 		buffer = ReadBufferBI(relation, P_NEW, RBM_ZERO_AND_LOCK, bistate);
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(relation->rd_smgr,buffer);
 
 		if (!PageIsNew(page))
 			elog(ERROR, "page %u of relation \"%s\" should be empty but is not",
@@ -424,7 +424,7 @@ loop:
 		{
 			/* easy case */
 			buffer = ReadBufferBI(relation, targetBlock, RBM_NORMAL, bistate);
-			if (PageIsAllVisible(BufferGetPage(buffer)))
+			if (PageIsAllVisible(BufferGetPage(relation->rd_smgr,buffer)))
 				visibilitymap_pin(relation, targetBlock, vmbuffer);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		}
@@ -432,7 +432,7 @@ loop:
 		{
 			/* also easy case */
 			buffer = otherBuffer;
-			if (PageIsAllVisible(BufferGetPage(buffer)))
+			if (PageIsAllVisible(BufferGetPage(relation->rd_smgr,buffer)))
 				visibilitymap_pin(relation, targetBlock, vmbuffer);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		}
@@ -440,7 +440,7 @@ loop:
 		{
 			/* lock other buffer first */
 			buffer = ReadBuffer(relation, targetBlock);
-			if (PageIsAllVisible(BufferGetPage(buffer)))
+			if (PageIsAllVisible(BufferGetPage(relation->rd_smgr,buffer)))
 				visibilitymap_pin(relation, targetBlock, vmbuffer);
 			LockBuffer(otherBuffer, BUFFER_LOCK_EXCLUSIVE);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
@@ -449,7 +449,7 @@ loop:
 		{
 			/* lock target buffer first */
 			buffer = ReadBuffer(relation, targetBlock);
-			if (PageIsAllVisible(BufferGetPage(buffer)))
+			if (PageIsAllVisible(BufferGetPage(relation->rd_smgr,buffer)))
 				visibilitymap_pin(relation, targetBlock, vmbuffer);
 			LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 			LockBuffer(otherBuffer, BUFFER_LOCK_EXCLUSIVE);
@@ -489,7 +489,7 @@ loop:
 		 * Now we can check to see if there's enough free space here. If so,
 		 * we're done.
 		 */
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(relation->rd_smgr,buffer);
 
 		/*
 		 * If necessary initialize page, it'll be used soon.  We could avoid
@@ -602,7 +602,7 @@ loop:
 	 * is empty (this should never happen, but if it does we don't want to
 	 * risk wiping out valid data).
 	 */
-	page = BufferGetPage(buffer);
+	page = BufferGetPage(relation->rd_smgr,buffer);
 
 	if (!PageIsNew(page))
 		elog(ERROR, "page %u of relation \"%s\" should be empty but is not",

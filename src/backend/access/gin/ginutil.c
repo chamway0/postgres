@@ -310,7 +310,7 @@ GinNewBuffer(Relation index)
 		 */
 		if (ConditionalLockBuffer(buffer))
 		{
-			if (GinPageIsRecyclable(BufferGetPage(buffer)))
+			if (GinPageIsRecyclable(BufferGetPage(index->rd_smgr,buffer)))
 				return buffer;	/* OK to use */
 
 			LockBuffer(buffer, GIN_UNLOCK);
@@ -350,14 +350,14 @@ GinInitPage(Page page, uint32 f, Size pageSize)
 void
 GinInitBuffer(Buffer b, uint32 f)
 {
-	GinInitPage(BufferGetPage(b), f, BufferGetPageSize(b));
+	GinInitPage(BufferGetPage(NULL,b), f, BufferGetPageSize(b));
 }
 
 void
 GinInitMetabuffer(Buffer b)
 {
 	GinMetaPageData *metadata;
-	Page		page = BufferGetPage(b);
+	Page		page = BufferGetPage(NULL,b);
 
 	GinInitPage(page, GIN_META, BufferGetPageSize(b));
 
@@ -643,7 +643,7 @@ ginGetStats(Relation index, GinStatsData *stats)
 
 	metabuffer = ReadBuffer(index, GIN_METAPAGE_BLKNO);
 	LockBuffer(metabuffer, GIN_SHARE);
-	metapage = BufferGetPage(metabuffer);
+	metapage = BufferGetPage(index->rd_smgr,metabuffer);
 	metadata = GinPageGetMeta(metapage);
 
 	stats->nPendingPages = metadata->nPendingPages;
@@ -670,7 +670,7 @@ ginUpdateStats(Relation index, const GinStatsData *stats, bool is_build)
 
 	metabuffer = ReadBuffer(index, GIN_METAPAGE_BLKNO);
 	LockBuffer(metabuffer, GIN_EXCLUSIVE);
-	metapage = BufferGetPage(metabuffer);
+	metapage = BufferGetPage(index->rd_smgr,metabuffer);
 	metadata = GinPageGetMeta(metapage);
 
 	START_CRIT_SECTION();

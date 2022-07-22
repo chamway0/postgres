@@ -88,6 +88,7 @@
 #include "portability/mem.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/pmem.h"
 #include "utils/guc.h"
 #include "utils/resowner_private.h"
 
@@ -163,6 +164,7 @@ bool		data_sync_retry = false;
 #endif
 
 #define VFD_CLOSED (-1)
+#define VFD_PTR_CLOSED ((char*)(-1))
 
 #define FileIsValid(file) \
 	((file) > 0 && (file) < (int) SizeVfdCache && VfdCache[file].fileName != NULL)
@@ -176,7 +178,9 @@ bool		data_sync_retry = false;
 
 typedef struct vfd
 {
+
 	int			fd;				/* current FD, or VFD_CLOSED if none */
+	char	   *ptr;            /*pmem_map_file*/
 	unsigned short fdstate;		/* bitflags for VFD's state */
 	ResourceOwner resowner;		/* owner, for automatic cleanup */
 	File		nextFree;		/* link to next free VFD, if in freelist */
@@ -223,6 +227,9 @@ static uint64 temporary_files_size = 0;
 typedef enum
 {
 	AllocateDescFile,
+#ifdef USE_LIBPMEM
+	AllocateDescMap,
+#endif	
 	AllocateDescPipe,
 	AllocateDescDir,
 	AllocateDescRawFD
@@ -237,6 +244,10 @@ typedef struct
 		FILE	   *file;
 		DIR		   *dir;
 		int			fd;
+#ifdef USE_LIBPMEM
+		size_t		fsize;
+		void	   *addr;
+#endif
 	}			desc;
 } AllocateDesc;
 
@@ -293,14 +304,18 @@ static int	nextTempTableSpace = 0;
  *
  *--------------------
  */
-static void Delete(File file);
+static inline void Delete(File file);
 static void LruDelete(File file);
-static void Insert(File file);
-static int	LruInsert(File file);
+static inline void Insert(File file);
+static inline int	LruInsert(File file);
 static bool ReleaseLruFile(void);
 static void ReleaseLruFiles(void);
 static File AllocateVfd(void);
 static void FreeVfd(File file);
+static void	MapFileClose(Vfd *vfdP);
+static void	MapFileReopen(Vfd *vfdP);
+static int	MapFileRead(Vfd *vfdP, char *buffer, int amount, off_t offset);
+static int	MapFileWrite(Vfd *vfdP, char *buffer, int amount, off_t offset);
 
 static int	FileAccess(File file);
 static File OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError);
@@ -1054,6 +1069,7 @@ LruDelete(File file)
 			 "could not close file \"%s\": %m", vfdP->fileName);
 	vfdP->fd = VFD_CLOSED;
 	--nfile;
+	MapFileClose(vfdP);
 
 	/* delete the vfd record from the LRU ring */
 	Delete(file);
@@ -1113,6 +1129,7 @@ LruInsert(File file)
 		else
 		{
 			++nfile;
+			MapFileReopen(vfdP);
 		}
 	}
 
@@ -1201,6 +1218,7 @@ AllocateVfd(void)
 			MemSet((char *) &(VfdCache[i]), 0, sizeof(Vfd));
 			VfdCache[i].nextFree = i + 1;
 			VfdCache[i].fd = VFD_CLOSED;
+			VfdCache[i].ptr = VFD_PTR_CLOSED;
 		}
 		VfdCache[newCacheSize - 1].nextFree = 0;
 		VfdCache[0].nextFree = SizeVfdCache;
@@ -1235,6 +1253,65 @@ FreeVfd(File file)
 
 	vfdP->nextFree = VfdCache[0].nextFree;
 	VfdCache[0].nextFree = file;
+}
+static void	MapFileClose(Vfd *vfdP)
+{
+	if( vfdP->ptr != VFD_PTR_CLOSED)
+	{
+		PmemFileClose(vfdP->ptr,vfdP->fileSize);
+		vfdP->ptr = VFD_PTR_CLOSED;
+		--nfile;
+	}
+}
+static void	MapFileReopen(Vfd *vfdP)
+{
+	if( share_buffer_type == 2)
+	{			
+		MapFileClose(vfdP);
+		PmemFileOpenPerm(vfdP->fileName, 0, vfdP->fileMode, 0, &vfdP->ptr, &vfdP->fileSize);
+		++nfile;
+	}
+}
+static int	MapFileRead(Vfd *vfdP, char *buffer, int amount, off_t offset)
+{
+	int returnCode = 0;
+	if( vfdP->ptr != VFD_PTR_CLOSED )
+	{
+		if( (offset+amount) > vfdP->fileSize )
+		{
+			//其他进程扩展了文件大小，重新映射一次
+			MapFileReopen(vfdP);
+			if( (offset+amount) > vfdP->fileSize )
+				return -1;
+		}
+		PmemFileRead(vfdP->ptr+offset,buffer,amount);
+		returnCode = amount;
+	}
+	else
+		returnCode = pg_pread(vfdP->fd, buffer, amount, offset);
+
+	return returnCode;
+}
+static int	MapFileWrite(Vfd *vfdP, char *buffer, int amount, off_t offset)
+{
+	int returnCode = 0;
+	if( vfdP->ptr != VFD_PTR_CLOSED )
+	{
+		if( (offset+amount) > vfdP->fileSize )
+		{
+			off_t fsize = lseek(vfdP->fd, 0, SEEK_END);
+			if( fsize < (offset+amount) )
+				ftruncate(vfdP->fd,(offset+amount));
+			
+			MapFileReopen(vfdP);
+		}
+		PmemFileWrite(vfdP->ptr+offset,buffer,amount);
+		returnCode = amount;
+	}
+	else
+		returnCode = pg_pwrite(vfdP->fd, buffer, amount, offset);
+
+	return returnCode;
 }
 
 /* returns 0 on success, -1 on re-open failure (with errno set) */
@@ -1381,6 +1458,7 @@ PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 	vfdP->fileSize = 0;
 	vfdP->fdstate = 0x0;
 	vfdP->resowner = NULL;
+	MapFileReopen(vfdP);
 
 	Insert(file);
 
@@ -1584,7 +1662,78 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
 	return file;
 }
 
+#ifdef USE_LIBPMEM
+/*
+ * Mmap a file with MapTransientFilePerm() and pass default file mode for
+ * the fileMode parameter.
+ */
+int
+MapTransientFile(const char *fileName, int fileFlags, size_t fsize, void **addr)
+{
+	return MapTransientFilePerm(fileName, fileFlags, PG_FILE_MODE_DEFAULT,
+								fsize, addr);
+}
 
+/*
+ * Like AllocateFile, but returns an unbuffered pointer to the mapped area
+ * like mmap(2)
+ */
+int
+MapTransientFilePerm(const char *fileName, int fileFlags, int fileMode,
+					 size_t fsize, void **addr)
+{
+	int			fd;
+
+	DO_DB(elog(LOG, "MapTransientFilePerm: Allocated %d (%s)",
+			   numAllocatedDescs, fileName));
+
+	/* Can we allocate another non-virtual FD? */
+	if (!reserveAllocatedDesc())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				 errmsg("exceeded maxAllocatedDescs (%d) while trying to open file \"%s\"",
+						maxAllocatedDescs, fileName)));
+
+	/* Close excess kernel FDs. */
+	ReleaseLruFiles();
+
+	if (addr != NULL)
+	{
+		void	   *ret_addr = NULL;
+		size_t		mapped_len;
+		fd = PmemFileOpenPerm(fileName, fileFlags, fileMode, fsize, &ret_addr, &mapped_len);
+		if (ret_addr != NULL)
+		{
+			AllocateDesc *desc = &allocatedDescs[numAllocatedDescs];
+
+			*addr = ret_addr;
+
+			desc->kind = AllocateDescMap;
+			desc->desc.addr = ret_addr;
+			desc->desc.fsize = fsize;
+			desc->create_subid = GetCurrentSubTransactionId();
+			numAllocatedDescs++;
+
+			return fd;
+		}
+	}
+
+	return -1;					/* failure */
+}
+#else
+int
+MapTransientFile(const char *fileName, int fileFlags, size_t fsize, void **addr)
+{
+	return -1;
+}
+
+int
+MapTransientFilePerm(const char *fileName, int fileFlags, int fileMode,
+					 size_t fsize, void **addr)
+{
+	return -1;
+}
+#endif
 /*
  * Create a new file.  The directory containing it must already exist.  Files
  * created this way are subject to temp_file_limit and are automatically
@@ -1738,6 +1887,7 @@ FileClose(File file)
 
 		--nfile;
 		vfdP->fd = VFD_CLOSED;
+		MapFileClose(vfdP);
 
 		/* remove the file from the lru ring */
 		Delete(file);
@@ -1823,6 +1973,9 @@ FilePrefetch(File file, off_t offset, int amount, uint32 wait_event_info)
 	if (returnCode < 0)
 		return returnCode;
 
+	if(VfdCache[file].ptr != VFD_PTR_CLOSED)
+		return returnCode;
+
 	pgstat_report_wait_start(wait_event_info);
 	returnCode = posix_fadvise(VfdCache[file].fd, offset, amount,
 							   POSIX_FADV_WILLNEED);
@@ -1854,7 +2007,10 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 		return;
 
 	pgstat_report_wait_start(wait_event_info);
-	pg_flush_data(VfdCache[file].fd, offset, nbytes);
+	if(VfdCache[file].ptr != VFD_PTR_CLOSED)
+		PmemFileFlush(VfdCache[file].ptr,VfdCache[file].fileSize);
+	else
+		pg_flush_data(VfdCache[file].fd, offset, nbytes);
 	pgstat_report_wait_end();
 }
 
@@ -1880,7 +2036,8 @@ FileRead(File file, char *buffer, int amount, off_t offset,
 
 retry:
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pread(vfdP->fd, buffer, amount, offset);
+	//returnCode = pg_pread(vfdP->fd, buffer, amount, offset);
+	returnCode = MapFileRead(vfdP,buffer, amount, offset);
 	pgstat_report_wait_end();
 
 	if (returnCode < 0)
@@ -1962,7 +2119,8 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 retry:
 	errno = 0;
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_pwrite(VfdCache[file].fd, buffer, amount, offset);
+	//returnCode = pg_pwrite(VfdCache[file].fd, buffer, amount, offset);
+	returnCode = MapFileWrite(vfdP,buffer, amount, offset);
 	pgstat_report_wait_end();
 
 	/* if write didn't set errno, assume problem is no disk space */
@@ -2019,19 +2177,40 @@ retry:
 int
 FileSync(File file, uint32 wait_event_info)
 {
-	int			returnCode;
+	int	returnCode;
+	Vfd *vfdP;
 
 	Assert(FileIsValid(file));
 
+	vfdP = &VfdCache[file];
 	DO_DB(elog(LOG, "FileSync: %d (%s)",
-			   file, VfdCache[file].fileName));
+			   file, vfdP->fileName));
 
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return returnCode;
 
 	pgstat_report_wait_start(wait_event_info);
-	returnCode = pg_fsync(VfdCache[file].fd);
+	if( vfdP->ptr != VFD_PTR_CLOSED )
+	{
+		int fsize = FileSize(file);
+		if( fsize > 0)
+		{
+			if(fsize != vfdP->fileSize)
+			{
+				//文件大小可能发生了变化
+				MapFileReopen(vfdP);
+			}
+			PmemFileFlush(vfdP->ptr,vfdP->fileSize);
+		}
+		else
+		{
+			//文件可能在此之前被其他进程删除了
+			FileClose(file);
+		}
+	}
+	else
+		returnCode = pg_fsync(vfdP->fd);
 	pgstat_report_wait_end();
 
 	return returnCode;
@@ -2055,7 +2234,7 @@ FileSize(File file)
 }
 
 int
-FileTruncate(File file, off_t offset, uint32 wait_event_info)
+FileTruncate(File file, off_t offset, uint32 wait_event_info,bool will_close)
 {
 	int			returnCode;
 
@@ -2072,12 +2251,18 @@ FileTruncate(File file, off_t offset, uint32 wait_event_info)
 	returnCode = ftruncate(VfdCache[file].fd, offset);
 	pgstat_report_wait_end();
 
-	if (returnCode == 0 && VfdCache[file].fileSize > offset)
+	if (returnCode == 0 )
 	{
+		Vfd		   *vfdP = &VfdCache[file];
 		/* adjust our state for truncation of a temp file */
-		Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
-		temporary_files_size -= VfdCache[file].fileSize - offset;
-		VfdCache[file].fileSize = offset;
+		if(vfdP->fdstate & FD_TEMP_FILE_LIMIT && vfdP->fileSize > offset )
+		{
+			//Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
+			temporary_files_size -= vfdP->fileSize - offset;
+			vfdP->fileSize = offset;
+		}
+		if(!will_close)
+			MapFileReopen(vfdP);
 	}
 
 	return returnCode;
@@ -2132,6 +2317,64 @@ FileGetRawMode(File file)
 	return VfdCache[file].fileMode;
 }
 
+/*
+ * FileGetMapPtr - returns the addr from mmap
+ */
+char*FileGetMapPtr(File file,off_t seekpos,int amount)
+{
+	Vfd *vfdP;
+
+	Assert(FileIsValid(file));
+
+	vfdP = &VfdCache[file];
+
+	/*
+	 * Is the file open?  If not, open it and put it at the head of the LRU
+	 * ring (possibly closing the least recently used file to get an FD).
+	 */
+	if (FileIsNotOpen(file))
+	{
+		/* Close excess kernel FDs. */
+		ReleaseLruFiles();
+
+		/*
+		 * The open could still fail for lack of file descriptors, eg due to
+		 * overall system file table being full.  So, be prepared to release
+		 * another FD if necessary...
+		 */
+		vfdP->fd = BasicOpenFilePerm(vfdP->fileName, vfdP->fileFlags,
+									 vfdP->fileMode);
+		if (vfdP->fd < 0)
+		{
+			DO_DB(elog(LOG, "FileGetMapPtr re-open failed: %m"));
+			return VFD_PTR_CLOSED;
+		}
+		else
+		{
+			++nfile;
+			MapFileReopen(vfdP);
+		}
+
+		/*
+		* put it at the head of the Lru ring
+		*/
+
+		Insert(file);
+	}
+	else
+	{
+		if( (seekpos+amount) > vfdP->fileSize )
+		{
+			off_t fsize = lseek(vfdP->fd, 0, SEEK_END);
+			if( fsize < (seekpos+amount) )
+				ftruncate(vfdP->fd,(seekpos+amount));
+			
+			MapFileReopen(vfdP);
+		}
+	}
+
+	return vfdP->ptr + seekpos;
+}
 /*
  * Make room for another allocatedDescs[] array entry if needed and possible.
  * Returns true if an array element is available.
@@ -2389,6 +2632,11 @@ FreeDesc(AllocateDesc *desc)
 		case AllocateDescRawFD:
 			result = close(desc->desc.fd);
 			break;
+#ifdef USE_LIBPMEM
+		case AllocateDescMap:
+			result = PmemFileClose(desc->desc.addr, desc->desc.fsize);
+			break;
+#endif
 		default:
 			elog(ERROR, "AllocateDesc kind not recognized");
 			result = 0;			/* keep compiler quiet */
@@ -2429,6 +2677,42 @@ FreeFile(FILE *file)
 
 	return fclose(file);
 }
+
+#ifdef USE_LIBPMEM
+/*
++ * Unmap a file returned by MapTransientFile.
++ *
++ * Note we do not check unmap's return value --- it is up to the caller
++ * to handle unmap errors.
++ */
+int
+UnmapTransientFile(void *addr, size_t fsize)
+{
+	int			i;
+
+	DO_DB(elog(LOG, "UnmapTransientFile: Allocated %d", numAllocatedDescs));
+
+	/* Remove fd from list of allocated files, if it's present */
+	for (i = numAllocatedDescs; --i >= 0;)
+	{
+		AllocateDesc *desc = &allocatedDescs[i];
+
+		if (desc->kind == AllocateDescMap && desc->desc.addr == addr)
+			return FreeDesc(desc);
+	}
+
+	/* Only get here if someone passes us a file not in allocatedDescs */
+	elog(WARNING, "fd passed to UnmapTransientFile was not obtained from MapTransientFile");
+
+	return PmemFileClose(addr, fsize);
+}
+#else
+int
+UnmapTransientFile(void *addr, size_t fsize)
+{
+	return -1;
+}
+#endif
 
 /*
  * Close a file returned by OpenTransientFile.

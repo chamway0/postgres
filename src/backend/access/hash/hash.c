@@ -509,7 +509,7 @@ loop_top:
 		LockBufferForCleanup(buf);
 		_hash_checkpage(rel, buf, LH_BUCKET_PAGE);
 
-		page = BufferGetPage(buf);
+		page = BufferGetPage(rel->rd_smgr,buf);
 		bucket_opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 
 		/*
@@ -559,7 +559,7 @@ loop_top:
 
 	/* Write-lock metapage and check for split since we started */
 	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
-	metap = HashPageGetMeta(BufferGetPage(metabuf));
+	metap = HashPageGetMeta(BufferGetPage(rel->rd_smgr,metabuf));
 
 	if (cur_maxbucket != metap->hashm_maxbucket)
 	{
@@ -614,7 +614,7 @@ loop_top:
 		XLogRegisterBuffer(0, metabuf, REGBUF_STANDARD);
 
 		recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_UPDATE_META_PAGE);
-		PageSetLSN(BufferGetPage(metabuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,metabuf), recptr);
 	}
 
 	END_CRIT_SECTION();
@@ -711,7 +711,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 
 		vacuum_delay_point();
 
-		page = BufferGetPage(buf);
+		page = BufferGetPage(rel->rd_smgr,buf);
 		opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 
 		/* Scan each tuple in page */
@@ -830,7 +830,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 									ndeletable * sizeof(OffsetNumber));
 
 				recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_DELETE);
-				PageSetLSN(BufferGetPage(buf), recptr);
+				PageSetLSN(BufferGetPage(rel->rd_smgr,buf), recptr);
 			}
 
 			END_CRIT_SECTION();
@@ -878,7 +878,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		HashPageOpaque bucket_opaque;
 		Page		page;
 
-		page = BufferGetPage(bucket_buf);
+		page = BufferGetPage(rel->rd_smgr,bucket_buf);
 		bucket_opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 
 		/* No ereport(ERROR) until changes are logged */

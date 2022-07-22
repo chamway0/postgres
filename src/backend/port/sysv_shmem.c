@@ -37,6 +37,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
+#include "storage/libpmem.h"
 #include "utils/guc.h"
 #include "utils/pidfile.h"
 
@@ -98,6 +99,8 @@ void	   *UsedShmemSegAddr = NULL;
 
 static Size AnonymousShmemSize;
 static void *AnonymousShmem = NULL;
+static char* pmem_path = "/mnt/pmem0";
+static bool  usePmemSharedBuffer=false;
 
 static void *InternalIpcMemoryCreate(IpcMemoryKey memKey, Size size);
 static void IpcMemoryDetach(int status, Datum shmaddr);
@@ -559,8 +562,25 @@ CreateAnonymousSegment(Size *size)
 		if (allocsize % hugepagesize != 0)
 			allocsize += hugepagesize - (allocsize % hugepagesize);
 
-		ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
-				   PG_MMAP_FLAGS | mmap_flags, -1, 0);
+		// if( share_buffer_type == 2)
+		// {
+		// 	size_t map_len = 0;
+		// 	int is_pmem = 0;
+		// 	ptr = pmem_map_file( pmem_path,allocsize,PMEM_FILE_CREATE|PMEM_FILE_TMPFILE,0666,&map_len,&is_pmem);
+		// 	if( !ptr )
+		// 		ptr = MAP_FAILED;
+			
+		// 	elog(LOG, "###share buffer all on pm. path:(%s),allocsize:%ld, map_len: %ld",pmem_path,allocsize,map_len);
+		// 	usePmemSharedBuffer = true;
+		// }
+		// else
+		{
+			ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
+					PG_MMAP_FLAGS | mmap_flags, -1, 0);
+			// if(ptr)
+			// 	elog(LOG, "ssd huge page successed.");
+		}
+
 		mmap_errno = errno;
 		if (huge_pages == HUGE_PAGES_TRY && ptr == MAP_FAILED)
 			elog(DEBUG1, "mmap(%zu) with MAP_HUGETLB failed, huge pages disabled: %m",
@@ -575,8 +595,22 @@ CreateAnonymousSegment(Size *size)
 		 * to non-huge pages.
 		 */
 		allocsize = *size;
-		ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
-				   PG_MMAP_FLAGS, -1, 0);
+		// if( share_buffer_type == 2)
+		// {
+		// 	size_t map_len = 0;
+		// 	int is_pmem = 0;
+		// 	ptr = pmem_map_file( pmem_path,allocsize,PMEM_FILE_CREATE|PMEM_FILE_TMPFILE,0666,&map_len,&is_pmem);
+		// 	if( !ptr )
+		// 		ptr = MAP_FAILED;
+			
+		// 	elog(LOG, "###share buffer all on pm. path:(%s),allocsize:%ld, map_len: %ld",pmem_path,allocsize,map_len);
+		// 	usePmemSharedBuffer = true;
+		// }
+		// else
+		{
+			ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
+					PG_MMAP_FLAGS , -1, 0);
+		}
 		mmap_errno = errno;
 	}
 
@@ -609,9 +643,18 @@ AnonymousShmemDetach(int status, Datum arg)
 	/* Release anonymous shared memory block, if any. */
 	if (AnonymousShmem != NULL)
 	{
-		if (munmap(AnonymousShmem, AnonymousShmemSize) < 0)
-			elog(LOG, "munmap(%p, %zu) failed: %m",
-				 AnonymousShmem, AnonymousShmemSize);
+		if(usePmemSharedBuffer)
+		{
+			if (pmem_unmap(AnonymousShmem, AnonymousShmemSize) < 0)
+				elog(LOG, "pmem_unmap(%p, %zu) failed: %m",
+					AnonymousShmem, AnonymousShmemSize);
+		}
+		else
+		{
+			if (munmap(AnonymousShmem, AnonymousShmemSize) < 0)
+				elog(LOG, "munmap(%p, %zu) failed: %m",
+					AnonymousShmem, AnonymousShmemSize);
+		}
 		AnonymousShmem = NULL;
 	}
 }
@@ -906,9 +949,18 @@ PGSharedMemoryDetach(void)
 
 	if (AnonymousShmem != NULL)
 	{
-		if (munmap(AnonymousShmem, AnonymousShmemSize) < 0)
-			elog(LOG, "munmap(%p, %zu) failed: %m",
-				 AnonymousShmem, AnonymousShmemSize);
+		if(usePmemSharedBuffer)
+		{
+			if (pmem_unmap(AnonymousShmem, AnonymousShmemSize) < 0)
+				elog(LOG, "pmem_unmap(%p, %zu) failed: %m",
+					AnonymousShmem, AnonymousShmemSize);
+		}
+		else
+		{
+			if (munmap(AnonymousShmem, AnonymousShmemSize) < 0)
+				elog(LOG, "munmap(%p, %zu) failed: %m",
+					AnonymousShmem, AnonymousShmemSize);
+		}		
 		AnonymousShmem = NULL;
 	}
 }

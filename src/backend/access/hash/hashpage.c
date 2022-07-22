@@ -144,7 +144,7 @@ _hash_getinitbuf(Relation rel, BlockNumber blkno)
 	/* ref count and lock type are correct */
 
 	/* initialize the page */
-	_hash_pageinit(BufferGetPage(buf), BufferGetPageSize(buf));
+	_hash_pageinit(BufferGetPage(rel->rd_smgr,buf), BufferGetPageSize(buf));
 
 	return buf;
 }
@@ -159,7 +159,7 @@ _hash_initbuf(Buffer buf, uint32 max_bucket, uint32 num_bucket, uint32 flag,
 	HashPageOpaque pageopaque;
 	Page		page;
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(NULL,buf);
 
 	/* initialize the page */
 	if (initpage)
@@ -223,7 +223,7 @@ _hash_getnewbuf(Relation rel, BlockNumber blkno, ForkNumber forkNum)
 	/* ref count and lock type are correct */
 
 	/* initialize the page */
-	_hash_pageinit(BufferGetPage(buf), BufferGetPageSize(buf));
+	_hash_pageinit(BufferGetPage(rel->rd_smgr,buf), BufferGetPageSize(buf));
 
 	return buf;
 }
@@ -379,7 +379,7 @@ _hash_init(Relation rel, double num_tuples, ForkNumber forkNum)
 	_hash_init_metabuffer(metabuf, num_tuples, procid, ffactor, false);
 	MarkBufferDirty(metabuf);
 
-	pg = BufferGetPage(metabuf);
+	pg = BufferGetPage(rel->rd_smgr,metabuf);
 	metap = HashPageGetMeta(pg);
 
 	/* XLOG stuff */
@@ -398,7 +398,7 @@ _hash_init(Relation rel, double num_tuples, ForkNumber forkNum)
 
 		recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_INIT_META_PAGE);
 
-		PageSetLSN(BufferGetPage(metabuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,metabuf), recptr);
 	}
 
 	num_buckets = metap->hashm_maxbucket + 1;
@@ -430,7 +430,7 @@ _hash_init(Relation rel, double num_tuples, ForkNumber forkNum)
 			log_newpage(&rel->rd_node,
 						forkNum,
 						blkno,
-						BufferGetPage(buf),
+						BufferGetPage(rel->rd_smgr,buf),
 						true);
 		_hash_relbuf(rel, buf);
 	}
@@ -479,8 +479,8 @@ _hash_init(Relation rel, double num_tuples, ForkNumber forkNum)
 
 		recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_INIT_BITMAP_PAGE);
 
-		PageSetLSN(BufferGetPage(bitmapbuf), recptr);
-		PageSetLSN(BufferGetPage(metabuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,bitmapbuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,metabuf), recptr);
 	}
 
 	/* all done */
@@ -524,7 +524,7 @@ _hash_init_metabuffer(Buffer buf, double num_tuples, RegProcedure procid,
 	spare_index = _hash_spareindex(num_buckets);
 	Assert(spare_index < HASH_MAX_SPLITPOINTS);
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(NULL,buf);
 	if (initpage)
 		_hash_pageinit(page, BufferGetPageSize(buf));
 
@@ -642,7 +642,7 @@ restart_expand:
 	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
 
 	_hash_checkpage(rel, metabuf, LH_META_PAGE);
-	metap = HashPageGetMeta(BufferGetPage(metabuf));
+	metap = HashPageGetMeta(BufferGetPage(rel->rd_smgr,metabuf));
 
 	/*
 	 * Check to see if split is still needed; someone else might have already
@@ -694,7 +694,7 @@ restart_expand:
 	if (!buf_oblkno)
 		goto fail;
 
-	opage = BufferGetPage(buf_oblkno);
+	opage = BufferGetPage(rel->rd_smgr,buf_oblkno);
 	oopaque = (HashPageOpaque) PageGetSpecialPointer(opage);
 
 	/*
@@ -865,7 +865,7 @@ restart_expand:
 	highmask = metap->hashm_highmask;
 	lowmask = metap->hashm_lowmask;
 
-	opage = BufferGetPage(buf_oblkno);
+	opage = BufferGetPage(rel->rd_smgr,buf_oblkno);
 	oopaque = (HashPageOpaque) PageGetSpecialPointer(opage);
 
 	/*
@@ -879,7 +879,7 @@ restart_expand:
 
 	MarkBufferDirty(buf_oblkno);
 
-	npage = BufferGetPage(buf_nblkno);
+	npage = BufferGetPage(rel->rd_smgr,buf_nblkno);
 
 	/*
 	 * initialize the new bucket's primary page and mark it to indicate that
@@ -932,9 +932,9 @@ restart_expand:
 
 		recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_SPLIT_ALLOCATE_PAGE);
 
-		PageSetLSN(BufferGetPage(buf_oblkno), recptr);
-		PageSetLSN(BufferGetPage(buf_nblkno), recptr);
-		PageSetLSN(BufferGetPage(metabuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,buf_oblkno), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,buf_nblkno), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,metabuf), recptr);
 	}
 
 	END_CRIT_SECTION();
@@ -1092,11 +1092,11 @@ _hash_splitbucket(Relation rel,
 	uint16		nitups = 0;
 
 	bucket_obuf = obuf;
-	opage = BufferGetPage(obuf);
+	opage = BufferGetPage(rel->rd_smgr,obuf);
 	oopaque = (HashPageOpaque) PageGetSpecialPointer(opage);
 
 	bucket_nbuf = nbuf;
-	npage = BufferGetPage(nbuf);
+	npage = BufferGetPage(rel->rd_smgr,nbuf);
 	nopaque = (HashPageOpaque) PageGetSpecialPointer(npage);
 
 	/* Copy the predicate locks from old bucket to new bucket. */
@@ -1199,7 +1199,7 @@ _hash_splitbucket(Relation rel,
 
 					/* chain to a new overflow page */
 					nbuf = _hash_addovflpage(rel, metabuf, nbuf, (nbuf == bucket_nbuf) ? true : false);
-					npage = BufferGetPage(nbuf);
+					npage = BufferGetPage(rel->rd_smgr,nbuf);
 					nopaque = (HashPageOpaque) PageGetSpecialPointer(npage);
 				}
 
@@ -1252,7 +1252,7 @@ _hash_splitbucket(Relation rel,
 
 		/* Else, advance to next old page */
 		obuf = _hash_getbuf(rel, oblkno, HASH_READ, LH_OVERFLOW_PAGE);
-		opage = BufferGetPage(obuf);
+		opage = BufferGetPage(rel->rd_smgr,obuf);
 		oopaque = (HashPageOpaque) PageGetSpecialPointer(opage);
 	}
 
@@ -1265,11 +1265,11 @@ _hash_splitbucket(Relation rel,
 	 * bucket and then the new bucket.
 	 */
 	LockBuffer(bucket_obuf, BUFFER_LOCK_EXCLUSIVE);
-	opage = BufferGetPage(bucket_obuf);
+	opage = BufferGetPage(rel->rd_smgr,bucket_obuf);
 	oopaque = (HashPageOpaque) PageGetSpecialPointer(opage);
 
 	LockBuffer(bucket_nbuf, BUFFER_LOCK_EXCLUSIVE);
-	npage = BufferGetPage(bucket_nbuf);
+	npage = BufferGetPage(rel->rd_smgr,bucket_nbuf);
 	nopaque = (HashPageOpaque) PageGetSpecialPointer(npage);
 
 	START_CRIT_SECTION();
@@ -1309,8 +1309,8 @@ _hash_splitbucket(Relation rel,
 
 		recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_SPLIT_COMPLETE);
 
-		PageSetLSN(BufferGetPage(bucket_obuf), recptr);
-		PageSetLSN(BufferGetPage(bucket_nbuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,bucket_obuf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,bucket_nbuf), recptr);
 	}
 
 	END_CRIT_SECTION();
@@ -1394,7 +1394,7 @@ _hash_finish_split(Relation rel, Buffer metabuf, Buffer obuf, Bucket obucket,
 		if (nblkno == bucket_nblkno)
 			bucket_nbuf = nbuf;
 
-		npage = BufferGetPage(nbuf);
+		npage = BufferGetPage(rel->rd_smgr,nbuf);
 		npageopaque = (HashPageOpaque) PageGetSpecialPointer(npage);
 
 		/* Scan each tuple in new page */
@@ -1448,7 +1448,7 @@ _hash_finish_split(Relation rel, Buffer metabuf, Buffer obuf, Bucket obucket,
 		return;
 	}
 
-	npage = BufferGetPage(bucket_nbuf);
+	npage = BufferGetPage(rel->rd_smgr,bucket_nbuf);
 	npageopaque = (HashPageOpaque) PageGetSpecialPointer(npage);
 	nbucket = npageopaque->hasho_bucket;
 
@@ -1482,7 +1482,7 @@ log_split_page(Relation rel, Buffer buf)
 
 		recptr = XLogInsert(RM_HASH_ID, XLOG_HASH_SPLIT_PAGE);
 
-		PageSetLSN(BufferGetPage(buf), recptr);
+		PageSetLSN(BufferGetPage(rel->rd_smgr,buf), recptr);
 	}
 }
 
@@ -1522,7 +1522,7 @@ _hash_getcachedmetap(Relation rel, Buffer *metabuf, bool force_refresh)
 		else
 			*metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_READ,
 									LH_META_PAGE);
-		page = BufferGetPage(*metabuf);
+		page = BufferGetPage(rel->rd_smgr,*metabuf);
 
 		/* Populate the cache. */
 		if (rel->rd_amcache == NULL)
@@ -1589,7 +1589,7 @@ _hash_getbucketbuf_from_hashkey(Relation rel, uint32 hashkey, int access,
 
 		/* Fetch the primary bucket page for the bucket */
 		buf = _hash_getbuf(rel, blkno, access, LH_BUCKET_PAGE);
-		page = BufferGetPage(buf);
+		page = BufferGetPage(rel->rd_smgr,buf);
 		opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 		Assert(opaque->hasho_bucket == bucket);
 		Assert(opaque->hasho_prevblkno != InvalidBlockNumber);

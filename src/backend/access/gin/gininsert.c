@@ -198,7 +198,7 @@ ginEntryInsert(GinState *ginstate,
 	btree.isBuild = (buildStats != NULL);
 
 	stack = ginFindLeafPage(&btree, false, false, NULL);
-	page = BufferGetPage(stack->buffer);
+	page = BufferGetPage(btree.index->rd_smgr,stack->buffer);
 
 	if (btree.findItem(&btree, stack))
 	{

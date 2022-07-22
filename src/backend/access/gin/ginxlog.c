@@ -30,7 +30,7 @@ ginRedoClearIncompleteSplit(XLogReaderState *record, uint8 block_id)
 
 	if (XLogReadBufferForRedo(record, block_id, &buffer) == BLK_NEEDS_REDO)
 	{
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(NULL,buffer);
 		GinPageGetOpaque(page)->flags &= ~GIN_INCOMPLETE_SPLIT;
 
 		PageSetLSN(page, lsn);
@@ -50,7 +50,7 @@ ginRedoCreatePTree(XLogReaderState *record)
 	Page		page;
 
 	buffer = XLogInitBufferForRedo(record, 0);
-	page = (Page) BufferGetPage(buffer);
+	page = (Page) BufferGetPage(NULL,buffer);
 
 	GinInitBuffer(buffer, GIN_DATA | GIN_LEAF | GIN_COMPRESSED);
 
@@ -70,7 +70,7 @@ ginRedoCreatePTree(XLogReaderState *record)
 static void
 ginRedoInsertEntry(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rdata)
 {
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(NULL,buffer);
 	ginxlogInsertEntry *data = (ginxlogInsertEntry *) rdata;
 	OffsetNumber offset = data->offset;
 	IndexTuple	itup;
@@ -318,7 +318,7 @@ ginRedoRecompress(Page page, ginxlogRecompressDataLeaf *data)
 static void
 ginRedoInsertData(Buffer buffer, bool isLeaf, BlockNumber rightblkno, void *rdata)
 {
-	Page		page = BufferGetPage(buffer);
+	Page		page = BufferGetPage(NULL,buffer);
 
 	if (isLeaf)
 	{
@@ -375,7 +375,7 @@ ginRedoInsert(XLogReaderState *record)
 
 	if (XLogReadBufferForRedo(record, 0, &buffer) == BLK_NEEDS_REDO)
 	{
-		Page		page = BufferGetPage(buffer);
+		Page		page = BufferGetPage(NULL,buffer);
 		Size		len;
 		char	   *payload = XLogRecGetBlockData(record, 0, &len);
 
@@ -456,7 +456,7 @@ ginRedoVacuumDataLeafPage(XLogReaderState *record)
 
 	if (XLogReadBufferForRedo(record, 0, &buffer) == BLK_NEEDS_REDO)
 	{
-		Page		page = BufferGetPage(buffer);
+		Page		page = BufferGetPage(NULL,buffer);
 		Size		len;
 		ginxlogVacuumDataLeafPage *xlrec;
 
@@ -489,7 +489,7 @@ ginRedoDeletePage(XLogReaderState *record)
 	 */
 	if (XLogReadBufferForRedo(record, 2, &lbuffer) == BLK_NEEDS_REDO)
 	{
-		page = BufferGetPage(lbuffer);
+		page = BufferGetPage(NULL,lbuffer);
 		Assert(GinPageIsData(page));
 		GinPageGetOpaque(page)->rightlink = data->rightLink;
 		PageSetLSN(page, lsn);
@@ -498,7 +498,7 @@ ginRedoDeletePage(XLogReaderState *record)
 
 	if (XLogReadBufferForRedo(record, 0, &dbuffer) == BLK_NEEDS_REDO)
 	{
-		page = BufferGetPage(dbuffer);
+		page = BufferGetPage(NULL,dbuffer);
 		Assert(GinPageIsData(page));
 		GinPageSetDeleted(page);
 		GinPageSetDeleteXid(page, data->deleteXid);
@@ -508,7 +508,7 @@ ginRedoDeletePage(XLogReaderState *record)
 
 	if (XLogReadBufferForRedo(record, 1, &pbuffer) == BLK_NEEDS_REDO)
 	{
-		page = BufferGetPage(pbuffer);
+		page = BufferGetPage(NULL,pbuffer);
 		Assert(GinPageIsData(page));
 		Assert(!GinPageIsLeaf(page));
 		GinPageDeletePostingItem(page, data->parentOffset);
@@ -540,7 +540,7 @@ ginRedoUpdateMetapage(XLogReaderState *record)
 	 */
 	metabuffer = XLogInitBufferForRedo(record, 0);
 	Assert(BufferGetBlockNumber(metabuffer) == GIN_METAPAGE_BLKNO);
-	metapage = BufferGetPage(metabuffer);
+	metapage = BufferGetPage(NULL,metabuffer);
 
 	GinInitMetabuffer(metabuffer);
 	memcpy(GinPageGetMeta(metapage), &data->metadata, sizeof(GinMetaPageData));
@@ -554,7 +554,7 @@ ginRedoUpdateMetapage(XLogReaderState *record)
 		 */
 		if (XLogReadBufferForRedo(record, 1, &buffer) == BLK_NEEDS_REDO)
 		{
-			Page		page = BufferGetPage(buffer);
+			Page		page = BufferGetPage(NULL,buffer);
 			OffsetNumber off;
 			int			i;
 			Size		tupsize;
@@ -602,7 +602,7 @@ ginRedoUpdateMetapage(XLogReaderState *record)
 		 */
 		if (XLogReadBufferForRedo(record, 1, &buffer) == BLK_NEEDS_REDO)
 		{
-			Page		page = BufferGetPage(buffer);
+			Page		page = BufferGetPage(NULL,buffer);
 
 			GinPageGetOpaque(page)->rightlink = data->newRightlink;
 
@@ -633,7 +633,7 @@ ginRedoInsertListPage(XLogReaderState *record)
 
 	/* We always re-initialize the page. */
 	buffer = XLogInitBufferForRedo(record, 0);
-	page = BufferGetPage(buffer);
+	page = BufferGetPage(NULL,buffer);
 
 	GinInitBuffer(buffer, GIN_LIST);
 	GinPageGetOpaque(page)->rightlink = data->rightlink;
@@ -682,7 +682,7 @@ ginRedoDeleteListPages(XLogReaderState *record)
 
 	metabuffer = XLogInitBufferForRedo(record, 0);
 	Assert(BufferGetBlockNumber(metabuffer) == GIN_METAPAGE_BLKNO);
-	metapage = BufferGetPage(metabuffer);
+	metapage = BufferGetPage(NULL,metabuffer);
 
 	GinInitMetabuffer(metabuffer);
 
@@ -711,7 +711,7 @@ ginRedoDeleteListPages(XLogReaderState *record)
 		Page		page;
 
 		buffer = XLogInitBufferForRedo(record, i + 1);
-		page = BufferGetPage(buffer);
+		page = BufferGetPage(NULL,buffer);
 		GinInitBuffer(buffer, GIN_DELETED);
 
 		PageSetLSN(page, lsn);

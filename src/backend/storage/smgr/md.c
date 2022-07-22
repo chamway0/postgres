@@ -134,7 +134,7 @@ static char *_mdfd_segpath(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber segno);
 static MdfdVec *_mdfd_openseg(SMgrRelation reln, ForkNumber forkno,
 							  BlockNumber segno, int oflags);
-static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forkno,
+static inline MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forkno,
 							 BlockNumber blkno, bool skipFsync, int behavior);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
@@ -398,7 +398,30 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 
 	pfree(path);
 }
+void *mdlocation(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+{
+	off_t		seekpos;
+	MdfdVec    *v;
 
+	v = _mdfd_getseg(reln, forknum, blocknum, true,
+					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
+
+	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);	
+
+	return FileGetMapPtr(v->mdfd_vfd,seekpos,BLCKSZ); 
+}
+// void 
+// mdmarkdirty(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+// {
+// 	MdfdVec    *v;
+
+// 	v = _mdfd_getseg(reln, forknum, blocknum, true,
+// 					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
+// 	register_dirty_segment(reln,forknum,v);
+// }
 /*
  *	mdextend() -- Add a block to the specified relation.
  *
@@ -840,7 +863,7 @@ mdtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 			 * This segment is no longer active. We truncate the file, but do
 			 * not delete it, for reasons explained in the header comments.
 			 */
-			if (FileTruncate(v->mdfd_vfd, 0, WAIT_EVENT_DATA_FILE_TRUNCATE) < 0)
+			if (FileTruncate(v->mdfd_vfd, 0, WAIT_EVENT_DATA_FILE_TRUNCATE,true) < 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not truncate file \"%s\": %m",
@@ -866,7 +889,7 @@ mdtruncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 			 */
 			BlockNumber lastsegblocks = nblocks - priorblocks;
 
-			if (FileTruncate(v->mdfd_vfd, (off_t) lastsegblocks * BLCKSZ, WAIT_EVENT_DATA_FILE_TRUNCATE) < 0)
+			if (FileTruncate(v->mdfd_vfd, (off_t) lastsegblocks * BLCKSZ, WAIT_EVENT_DATA_FILE_TRUNCATE,false) < 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not truncate file \"%s\" to %u blocks: %m",
@@ -933,6 +956,10 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 {
 	FileTag		tag;
 
+	//在PM上去掉注册请求到checkpoint
+	if( share_buffer_type == 2)
+		return;
+		
 	INIT_MD_FILETAG(tag, reln->smgr_rnode.node, forknum, seg->mdfd_segno);
 
 	/* Temp relations should never be fsync'd */
@@ -965,6 +992,27 @@ register_unlink_segment(RelFileNodeBackend rnode, ForkNumber forknum,
 	/* Should never be used with temp relations */
 	Assert(!RelFileNodeBackendIsTemp(rnode));
 
+	//在PM上去掉注册请求到checkpoint
+	if( share_buffer_type == 2)
+	{
+		char		path[MAXPGPATH];
+		if( mdunlinkfiletag(&tag,path) < 0)
+		{
+			/*
+			 * There's a race condition, when the database is dropped at the
+			 * same time that we process the pending unlink requests. If the
+			 * DROP DATABASE deletes the file before we do, we will get ENOENT
+			 * here. rmtree() also has to ignore ENOENT errors, to deal with
+			 * the possibility that we delete the file first.
+			 */
+			if (errno != ENOENT)
+				ereport(WARNING,
+						(errcode_for_file_access(),
+						 errmsg("could not remove file \"%s\": %m", path)));			
+		}
+		return;
+	}
+
 	RegisterSyncRequest(&tag, SYNC_UNLINK_REQUEST, true /* retryOnError */ );
 }
 
@@ -976,6 +1024,10 @@ register_forget_request(RelFileNodeBackend rnode, ForkNumber forknum,
 						BlockNumber segno)
 {
 	FileTag		tag;
+
+	//在PM上去掉注册请求到checkpoint
+	if( share_buffer_type == 2)
+		return;
 
 	INIT_MD_FILETAG(tag, rnode.node, forknum, segno);
 
@@ -990,6 +1042,10 @@ ForgetDatabaseSyncRequests(Oid dbid)
 {
 	FileTag		tag;
 	RelFileNode rnode;
+
+	//在PM上去掉注册请求到checkpoint
+	if( share_buffer_type == 2)
+		return;
 
 	rnode.dbNode = dbid;
 	rnode.spcNode = 0;

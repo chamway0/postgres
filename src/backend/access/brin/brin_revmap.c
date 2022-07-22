@@ -78,7 +78,7 @@ brinRevmapInitialize(Relation idxrel, BlockNumber *pagesPerRange,
 
 	meta = ReadBuffer(idxrel, BRIN_METAPAGE_BLKNO);
 	LockBuffer(meta, BUFFER_LOCK_SHARE);
-	page = BufferGetPage(meta);
+	page = BufferGetPage(idxrel->rd_smgr,meta);
 	TestForOldSnapshot(snapshot, idxrel, page);
 	metadata = (BrinMetaPageData *) PageGetContents(page);
 
@@ -163,7 +163,7 @@ brinSetHeapBlockItemptr(Buffer buf, BlockNumber pagesPerRange,
 	Page		page;
 
 	/* The correct page should already be pinned and locked */
-	page = BufferGetPage(buf);
+	page = BufferGetPage(NULL,buf);
 	contents = (RevmapContents *) PageGetContents(page);
 	iptr = (ItemPointerData *) contents->rm_tids;
 	iptr += HEAPBLK_TO_REVMAP_INDEX(pagesPerRange, heapBlk);
@@ -241,7 +241,7 @@ brinGetTupleForHeapBlock(BrinRevmap *revmap, BlockNumber heapBlk,
 		LockBuffer(revmap->rm_currBuf, BUFFER_LOCK_SHARE);
 
 		contents = (RevmapContents *)
-			PageGetContents(BufferGetPage(revmap->rm_currBuf));
+			PageGetContents(BufferGetPage(idxRel->rd_smgr,revmap->rm_currBuf));
 		iptr = contents->rm_tids;
 		iptr += HEAPBLK_TO_REVMAP_INDEX(revmap->rm_pagesPerRange, heapBlk);
 
@@ -276,7 +276,7 @@ brinGetTupleForHeapBlock(BrinRevmap *revmap, BlockNumber heapBlk,
 			*buf = ReadBuffer(idxRel, blk);
 		}
 		LockBuffer(*buf, mode);
-		page = BufferGetPage(*buf);
+		page = BufferGetPage(idxRel->rd_smgr,*buf);
 		TestForOldSnapshot(snapshot, idxRel, page);
 
 		/* If we land on a revmap page, start over */
@@ -353,7 +353,7 @@ brinRevmapDesummarizeRange(Relation idxrel, BlockNumber heapBlk)
 
 	/* Lock the revmap page, obtain the index tuple pointer from it */
 	revmapBuf = brinLockRevmapPageForUpdate(revmap, heapBlk);
-	revmapPg = BufferGetPage(revmapBuf);
+	revmapPg = BufferGetPage(revmap->rm_irel->rd_smgr,revmapBuf);
 	revmapOffset = HEAPBLK_TO_REVMAP_INDEX(revmap->rm_pagesPerRange, heapBlk);
 
 	contents = (RevmapContents *) PageGetContents(revmapPg);
@@ -370,7 +370,7 @@ brinRevmapDesummarizeRange(Relation idxrel, BlockNumber heapBlk)
 
 	regBuf = ReadBuffer(idxrel, ItemPointerGetBlockNumber(iptr));
 	LockBuffer(regBuf, BUFFER_LOCK_EXCLUSIVE);
-	regPg = BufferGetPage(regBuf);
+	regPg = BufferGetPage(idxrel->rd_smgr,regBuf);
 	/*
 	 * We're only removing data, not reading it, so there's no need to
 	 * TestForOldSnapshot here.
@@ -545,7 +545,7 @@ revmap_physical_extend(BrinRevmap *revmap)
 	 * another backend can extend the index with regular BRIN pages.
 	 */
 	LockBuffer(revmap->rm_metaBuf, BUFFER_LOCK_EXCLUSIVE);
-	metapage = BufferGetPage(revmap->rm_metaBuf);
+	metapage = BufferGetPage(revmap->rm_irel->rd_smgr,revmap->rm_metaBuf);
 	metadata = (BrinMetaPageData *) PageGetContents(metapage);
 
 	/*
@@ -565,7 +565,7 @@ revmap_physical_extend(BrinRevmap *revmap)
 	{
 		buf = ReadBuffer(irel, mapBlk);
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-		page = BufferGetPage(buf);
+		page = BufferGetPage(irel->rd_smgr,buf);
 	}
 	else
 	{
@@ -588,7 +588,7 @@ revmap_physical_extend(BrinRevmap *revmap)
 			return;
 		}
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-		page = BufferGetPage(buf);
+		page = BufferGetPage(irel->rd_smgr,buf);
 
 		if (needLock)
 			UnlockRelationForExtension(irel, ExclusiveLock);

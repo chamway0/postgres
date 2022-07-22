@@ -81,12 +81,13 @@ extern int	FileRead(File file, char *buffer, int amount, off_t offset, uint32 wa
 extern int	FileWrite(File file, char *buffer, int amount, off_t offset, uint32 wait_event_info);
 extern int	FileSync(File file, uint32 wait_event_info);
 extern off_t FileSize(File file);
-extern int	FileTruncate(File file, off_t offset, uint32 wait_event_info);
+extern int	FileTruncate(File file, off_t offset, uint32 wait_event_info,bool will_close);
 extern void FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info);
 extern char *FilePathName(File file);
 extern int	FileGetRawDesc(File file);
 extern int	FileGetRawFlags(File file);
 extern mode_t FileGetRawMode(File file);
+extern char*  FileGetMapPtr(File file,off_t seekpos,int amount);
 
 /* Operations used for sharing named temporary files */
 extern File PathNameCreateTemporaryFile(const char *name, bool error_on_failure);
@@ -115,6 +116,13 @@ extern int	FreeDir(DIR *dir);
 extern int	OpenTransientFile(const char *fileName, int fileFlags);
 extern int	OpenTransientFilePerm(const char *fileName, int fileFlags, mode_t fileMode);
 extern int	CloseTransientFile(int fd);
+
+/* Operations to allow use of a memory-mapped file */
+extern int MapTransientFile(const char *fileName, int fileFlags, size_t fsize,
+				 void **addr);
+extern int MapTransientFilePerm(const char *fileName, int fileFlags, int fileMode,
+					 size_t fsize, void **addr);
+extern int	UnmapTransientFile(void *addr, size_t fsize);
 
 /* If you've really really gotta have a plain kernel FD, use this */
 extern int	BasicOpenFile(const char *fileName, int fileFlags);

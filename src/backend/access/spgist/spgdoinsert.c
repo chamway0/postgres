@@ -452,7 +452,7 @@ moveLeafs(Relation index, SpGistState *state,
 	/* Find a leaf page that will hold them */
 	nbuf = SpGistGetBuffer(index, GBUF_LEAF | (isNulls ? GBUF_NULLS : 0),
 						   size, &xlrec.newPage);
-	npage = BufferGetPage(nbuf);
+	npage = BufferGetPage(index->rd_smgr,nbuf);
 	nblkno = BufferGetBlockNumber(nbuf);
 	Assert(nblkno != current->blkno);
 
@@ -1039,7 +1039,7 @@ doPickSplit(Relation index, SpGistState *state,
 		nodePageSelect = (uint8 *) palloc(sizeof(uint8) * out.nNodes);
 
 		curspace = currentFreeSpace;
-		newspace = PageGetExactFreeSpace(BufferGetPage(newLeafBuffer));
+		newspace = PageGetExactFreeSpace(BufferGetPage(index->rd_smgr,newLeafBuffer));
 		for (i = 0; i < out.nNodes; i++)
 		{
 			if (leafSizes[i] <= curspace)
@@ -1072,7 +1072,7 @@ doPickSplit(Relation index, SpGistState *state,
 
 			/* Repeat the node assignment process --- should succeed now */
 			curspace = currentFreeSpace;
-			newspace = PageGetExactFreeSpace(BufferGetPage(newLeafBuffer));
+			newspace = PageGetExactFreeSpace(BufferGetPage(index->rd_smgr,newLeafBuffer));
 			for (i = 0; i < out.nNodes; i++)
 			{
 				if (leafSizes[i] <= curspace)
@@ -1203,7 +1203,7 @@ doPickSplit(Relation index, SpGistState *state,
 			it->nextOffset = InvalidOffsetNumber;
 
 		/* Insert it on page */
-		newoffset = SpGistPageAddNewItem(state, BufferGetPage(leafBuffer),
+		newoffset = SpGistPageAddNewItem(state, BufferGetPage(index->rd_smgr,leafBuffer),
 										 (Item) it, it->size,
 										 &startOffsets[leafPageSelect[i]],
 										 false);
@@ -1277,7 +1277,7 @@ doPickSplit(Relation index, SpGistState *state,
 		/* Repoint "current" at the new inner tuple */
 		current->buffer = newInnerBuffer;
 		current->blkno = BufferGetBlockNumber(current->buffer);
-		current->page = BufferGetPage(current->buffer);
+		current->page = BufferGetPage(index->rd_smgr,current->buffer);
 		xlrec.offnumInner = current->offnum =
 			SpGistPageAddNewItem(state, current->page,
 								 (Item) innerTuple, innerTuple->size,
@@ -1393,14 +1393,14 @@ doPickSplit(Relation index, SpGistState *state,
 		/* Update page LSNs on all affected pages */
 		if (newLeafBuffer != InvalidBuffer)
 		{
-			Page		page = BufferGetPage(newLeafBuffer);
+			Page		page = BufferGetPage(index->rd_smgr,newLeafBuffer);
 
 			PageSetLSN(page, recptr);
 		}
 
 		if (saveCurrent.buffer != InvalidBuffer)
 		{
-			Page		page = BufferGetPage(saveCurrent.buffer);
+			Page		page = BufferGetPage(index->rd_smgr,saveCurrent.buffer);
 
 			PageSetLSN(page, recptr);
 		}
@@ -1580,7 +1580,7 @@ spgAddNodeAction(Relation index, SpGistState *state,
 										  newInnerTuple->size + sizeof(ItemIdData),
 										  &xlrec.newPage);
 		current->blkno = BufferGetBlockNumber(current->buffer);
-		current->page = BufferGetPage(current->buffer);
+		current->page = BufferGetPage(index->rd_smgr,current->buffer);
 
 		/*
 		 * Let's just make real sure new current isn't same as old.  Right now
@@ -1818,7 +1818,7 @@ spgSplitNodeAction(Relation index, SpGistState *state,
 	{
 		postfixBlkno = BufferGetBlockNumber(newBuffer);
 		xlrec.offnumPostfix = postfixOffset =
-			SpGistPageAddNewItem(state, BufferGetPage(newBuffer),
+			SpGistPageAddNewItem(state, BufferGetPage(index->rd_smgr,newBuffer),
 								 (Item) postfixTuple, postfixTuple->size,
 								 NULL, false);
 		MarkBufferDirty(newBuffer);
@@ -1867,7 +1867,7 @@ spgSplitNodeAction(Relation index, SpGistState *state,
 
 		if (newBuffer != InvalidBuffer)
 		{
-			PageSetLSN(BufferGetPage(newBuffer), recptr);
+			PageSetLSN(BufferGetPage(index->rd_smgr,newBuffer), recptr);
 		}
 	}
 
@@ -2057,7 +2057,7 @@ spgdoinsert(Relation index, SpGistState *state,
 			/* inner tuple can be stored on the same page as parent one */
 			current.buffer = parent.buffer;
 		}
-		current.page = BufferGetPage(current.buffer);
+		current.page = BufferGetPage(index->rd_smgr,current.buffer);
 
 		/* should not arrive at a page of the wrong type */
 		if (isnull ? !SpGistPageStoresNulls(current.page) :

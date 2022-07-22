@@ -224,7 +224,7 @@ _hash_get_totalbuckets(uint32 splitpoint_phase)
 void
 _hash_checkpage(Relation rel, Buffer buf, int flags)
 {
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(rel->rd_smgr,buf);
 
 	/*
 	 * ReadBuffer verifies that every newly-read page passes
@@ -447,7 +447,7 @@ _hash_get_oldblock_from_newbucket(Relation rel, Bucket new_bucket)
 	old_bucket = new_bucket & mask;
 
 	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_READ, LH_META_PAGE);
-	metap = HashPageGetMeta(BufferGetPage(metabuf));
+	metap = HashPageGetMeta(BufferGetPage(rel->rd_smgr,metabuf));
 
 	blkno = BUCKET_TO_BLKNO(metap, old_bucket);
 
@@ -474,7 +474,7 @@ _hash_get_newblock_from_oldbucket(Relation rel, Bucket old_bucket)
 	BlockNumber blkno;
 
 	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_READ, LH_META_PAGE);
-	metap = HashPageGetMeta(BufferGetPage(metabuf));
+	metap = HashPageGetMeta(BufferGetPage(rel->rd_smgr,metabuf));
 
 	new_bucket = _hash_get_newbucket_from_oldbucket(rel, old_bucket,
 													metap->hashm_lowmask,
@@ -580,7 +580,7 @@ _hash_kill_items(IndexScanDesc scan)
 	else
 		buf = _hash_getbuf(rel, blkno, HASH_READ, LH_OVERFLOW_PAGE);
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 	opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 	maxoff = PageGetMaxOffsetNumber(page);
 

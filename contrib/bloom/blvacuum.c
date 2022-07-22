@@ -196,7 +196,7 @@ blvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
 									RBM_NORMAL, info->strategy);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
-		page = (Page) BufferGetPage(buffer);
+		page = (Page) BufferGetPage(index->rd_smgr,buffer);
 
 		if (PageIsNew(page) || BloomPageIsDeleted(page))
 		{

@@ -359,7 +359,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		Assert(XLogRecHasBlockImage(record, block_id));
 		*buf = XLogReadBufferExtended(rnode, forknum, blkno,
 									  get_cleanup_lock ? RBM_ZERO_AND_CLEANUP_LOCK : RBM_ZERO_AND_LOCK);
-		page = BufferGetPage(*buf);
+		page = BufferGetPage(NULL,*buf);
 		if (!RestoreBlockImage(record, block_id, page))
 			elog(ERROR, "failed to restore block image");
 
@@ -397,7 +397,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 				else
 					LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
 			}
-			if (lsn <= PageGetLSN(BufferGetPage(*buf)))
+			if (lsn <= PageGetLSN(BufferGetPage(NULL,*buf)))
 				return BLK_DONE;
 			else
 				return BLK_NEEDS_REDO;
@@ -504,7 +504,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	if (mode == RBM_NORMAL)
 	{
 		/* check that page has been initialized */
-		Page		page = (Page) BufferGetPage(buffer);
+		Page		page = (Page) BufferGetPage(NULL,buffer);
 
 		/*
 		 * We assume that PageIsNew is safe without a lock. During recovery,

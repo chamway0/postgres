@@ -896,7 +896,8 @@ CheckpointerShmemSize(void)
 	 * NBuffers.  This may prove too large or small ...
 	 */
 	size = offsetof(CheckpointerShmemStruct, requests);
-	size = add_size(size, mul_size(NBuffers, sizeof(CheckpointerRequest)));
+	if(share_buffer_type == 1)
+		size = add_size(size, mul_size(NBuffers, sizeof(CheckpointerRequest)));
 
 	return size;
 }
@@ -1288,7 +1289,7 @@ AbsorbSyncRequests(void)
 	CheckpointerRequest *request;
 	int			n;
 
-	if (!AmCheckpointerProcess())
+	if (!AmCheckpointerProcess() || share_buffer_type==2)
 		return;
 
 	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);

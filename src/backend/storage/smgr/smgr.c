@@ -25,6 +25,7 @@
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
+#include "miscadmin.h"
 
 
 /*
@@ -61,6 +62,10 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	void*		(*smgr_location) (SMgrRelation reln, ForkNumber forknum,
+								  BlockNumber nblocks);
+//	void		(*smgr_markdirty) (SMgrRelation reln, ForkNumber forknum,
+//								  BlockNumber nblocks);								  	
 } f_smgr;
 
 static const f_smgr smgrsw[] = {
@@ -80,6 +85,8 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+		.smgr_location = mdlocation
+//		.smgr_markdirty = mdmarkdirty
 	}
 };
 
@@ -697,6 +704,30 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
 }
+
+void
+*smgrlocation(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks,RelFileNode* rnode)
+{
+	if( reln == NULL )
+	{
+		Assert(rnode != NULL);
+		reln = smgropen(*rnode, InvalidBackendId);
+	}
+	else if( rnode )
+	{
+		Assert( (reln.smgr_rnode.node.spcNode == rnode->spcNode) &&
+				(reln.smgr_rnode.node.dbNode == rnode->dbNode) &&
+				(reln.smgr_rnode.node.relNode == rnode->relNode) );
+	}
+	
+	return smgrsw[reln->smgr_which].smgr_location(reln, forknum,nblocks);
+}
+
+// void
+// smgrmarkdirty(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
+// {
+// 	smgrsw[reln->smgr_which].smgr_markdirty(reln, forknum,nblocks);
+// }
 
 /*
  * AtEOXact_SMgr

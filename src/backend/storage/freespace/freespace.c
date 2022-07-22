@@ -213,7 +213,7 @@ XLogRecordPageWithFreeSpace(RelFileNode rnode, BlockNumber heapBlk,
 	buf = XLogReadBufferExtended(rnode, FSM_FORKNUM, blkno, RBM_ZERO_ON_ERROR);
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(NULL,buf);
 	if (PageIsNew(page))
 		PageInit(page, BLCKSZ, 0);
 
@@ -240,7 +240,7 @@ GetRecordedFreeSpace(Relation rel, BlockNumber heapBlk)
 	buf = fsm_readbuf(rel, addr, false);
 	if (!BufferIsValid(buf))
 		return 0;
-	cat = fsm_get_avail(BufferGetPage(buf), slot);
+	cat = fsm_get_avail(BufferGetPage(rel->rd_smgr,buf), slot);
 	ReleaseBuffer(buf);
 
 	return fsm_space_cat_to_avail(cat);
@@ -291,7 +291,7 @@ FreeSpaceMapTruncateRel(Relation rel, BlockNumber nblocks)
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
 
-		fsm_truncate_avail(BufferGetPage(buf), first_removed_slot);
+		fsm_truncate_avail(BufferGetPage(rel->rd_smgr,buf), first_removed_slot);
 
 		/*
 		 * Truncation of a relation is WAL-logged at a higher-level, and we
@@ -596,11 +596,11 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 	 * Current usage is safe because PageGetContents() does not require that.
 	 */
 	buf = ReadBufferExtended(rel, FSM_FORKNUM, blkno, RBM_ZERO_ON_ERROR, NULL);
-	if (PageIsNew(BufferGetPage(buf)))
+	if (PageIsNew(BufferGetPage(rel->rd_smgr,buf)))
 	{
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-		if (PageIsNew(BufferGetPage(buf)))
-			PageInit(BufferGetPage(buf), BLCKSZ, 0);
+		if (PageIsNew(BufferGetPage(rel->rd_smgr,buf)))
+			PageInit(BufferGetPage(rel->rd_smgr,buf), BLCKSZ, 0);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	}
 	return buf;
@@ -678,7 +678,7 @@ fsm_set_and_search(Relation rel, FSMAddress addr, uint16 slot,
 	buf = fsm_readbuf(rel, addr, true);
 	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 
 	if (fsm_set_avail(page, slot, newValue))
 		MarkBufferDirtyHint(buf, false);
@@ -722,7 +722,7 @@ fsm_search(Relation rel, uint8 min_cat)
 									(addr.level == FSM_BOTTOM_LEVEL),
 									false);
 			if (slot == -1)
-				max_avail = fsm_get_max_avail(BufferGetPage(buf));
+				max_avail = fsm_get_max_avail(BufferGetPage(rel->rd_smgr,buf));
 			UnlockReleaseBuffer(buf);
 		}
 		else
@@ -816,7 +816,7 @@ fsm_vacuum_page(Relation rel, FSMAddress addr,
 	else
 		*eof_p = false;
 
-	page = BufferGetPage(buf);
+	page = BufferGetPage(rel->rd_smgr,buf);
 
 	/*
 	 * If we're above the bottom level, recurse into children, and fix the

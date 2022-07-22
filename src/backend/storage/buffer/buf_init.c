@@ -16,6 +16,7 @@
 
 #include "storage/bufmgr.h"
 #include "storage/buf_internals.h"
+#include "miscadmin.h"
 
 
 BufferDescPadded *BufferDescriptors;
@@ -67,10 +68,10 @@ CkptSortItem *CkptBufferIds;
 void
 InitBufferPool(void)
 {
-	bool		foundBufs,
-				foundDescs,
-				foundIOLocks,
-				foundBufCkpt;
+	bool		foundBufs = false;
+	bool		foundDescs= false;
+	bool		foundIOLocks = false;
+	bool		foundBufCkpt = false;
 
 	/* Align descriptors to a cacheline boundary. */
 	BufferDescriptors = (BufferDescPadded *)
@@ -78,17 +79,25 @@ InitBufferPool(void)
 						NBuffers * sizeof(BufferDescPadded),
 						&foundDescs);
 
-	BufferBlocks = (char *)
-		ShmemInitStruct("Buffer Blocks",
-						NBuffers * (Size) BLCKSZ, &foundBufs);
+	if(share_buffer_type == 1)
+	{
+		BufferBlocks = (char *)
+			ShmemInitStruct("Buffer Blocks",
+							NBuffers * (Size) BLCKSZ, &foundBufs);
 
-	/* Align lwlocks to cacheline boundary */
-	BufferIOLWLockArray = (LWLockMinimallyPadded *)
-		ShmemInitStruct("Buffer IO Locks",
-						NBuffers * (Size) sizeof(LWLockMinimallyPadded),
-						&foundIOLocks);
+		/* Align lwlocks to cacheline boundary */
+		BufferIOLWLockArray = (LWLockMinimallyPadded *)
+			ShmemInitStruct("Buffer IO Locks",
+							NBuffers * (Size) sizeof(LWLockMinimallyPadded),
+							&foundIOLocks);
 
-	LWLockRegisterTranche(LWTRANCHE_BUFFER_IO_IN_PROGRESS, "buffer_io");
+		LWLockRegisterTranche(LWTRANCHE_BUFFER_IO_IN_PROGRESS, "buffer_io");
+	}
+	else
+	{
+		elog(LOG,"InitBufferPool:Buffer Blocks on pmem");
+	}
+
 	LWLockRegisterTranche(LWTRANCHE_BUFFER_CONTENT, "buffer_content");
 
 	/*
@@ -98,14 +107,19 @@ InitBufferPool(void)
 	 * the checkpointer is restarted, memory allocation failures would be
 	 * painful.
 	 */
-	CkptBufferIds = (CkptSortItem *)
-		ShmemInitStruct("Checkpoint BufferIds",
-						NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
+	if(share_buffer_type == 1)
+	{
+		CkptBufferIds = (CkptSortItem *)
+			ShmemInitStruct("Checkpoint BufferIds",
+							NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
+	}
+
 
 	if (foundDescs || foundBufs || foundIOLocks || foundBufCkpt)
 	{
 		/* should find all of these, or none of them */
-		Assert(foundDescs && foundBufs && foundIOLocks && foundBufCkpt);
+		if(share_buffer_type == 1)
+			Assert(foundDescs && foundBufs && foundIOLocks && foundBufCkpt);
 		/* note: this path is only taken in EXEC_BACKEND case */
 	}
 	else
@@ -121,10 +135,10 @@ InitBufferPool(void)
 
 			CLEAR_BUFFERTAG(buf->tag);
 
-			pg_atomic_init_u32(&buf->state, 0);
+			pg_atomic_init_u32(&buf->state, (share_buffer_type == 1)?0:BM_VALID);
 			buf->wait_backend_pid = 0;
 
-			buf->buf_id = i;
+			buf->buf_id = (share_buffer_type == 1)? i : -1;
 
 			/*
 			 * Initially link all the buffers together as unused. Subsequent
@@ -135,8 +149,12 @@ InitBufferPool(void)
 			LWLockInitialize(BufferDescriptorGetContentLock(buf),
 							 LWTRANCHE_BUFFER_CONTENT);
 
-			LWLockInitialize(BufferDescriptorGetIOLock(buf),
-							 LWTRANCHE_BUFFER_IO_IN_PROGRESS);
+			if( share_buffer_type == 1)
+			{
+				LWLockInitialize(BufferDescriptorGetIOLock(buf),
+								LWTRANCHE_BUFFER_IO_IN_PROGRESS);
+			}
+
 		}
 
 		/* Correct last entry of linked list */
@@ -167,8 +185,11 @@ BufferShmemSize(void)
 	/* to allow aligning buffer descriptors */
 	size = add_size(size, PG_CACHE_LINE_SIZE);
 
-	/* size of data pages */
-	size = add_size(size, mul_size(NBuffers, BLCKSZ));
+	if(share_buffer_type == 1 )
+	{
+		/* size of data pages */
+		size = add_size(size, mul_size(NBuffers, BLCKSZ));
+	}
 
 	/* size of stuff controlled by freelist.c */
 	size = add_size(size, StrategyShmemSize());
@@ -182,12 +203,16 @@ BufferShmemSize(void)
 	 * locks are not highly contended, we lay out the array with minimal
 	 * padding.
 	 */
-	size = add_size(size, mul_size(NBuffers, sizeof(LWLockMinimallyPadded)));
-	/* to allow aligning the above */
-	size = add_size(size, PG_CACHE_LINE_SIZE);
+	if(share_buffer_type == 1 )
+	{
+		size = add_size(size, mul_size(NBuffers, sizeof(LWLockMinimallyPadded)));
 
-	/* size of checkpoint sort array in bufmgr.c */
-	size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));
+		/* to allow aligning the above */
+		size = add_size(size, PG_CACHE_LINE_SIZE);
 
+		/* size of checkpoint sort array in bufmgr.c */
+		size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));
+	}
+	
 	return size;
 }

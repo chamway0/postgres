@@ -275,7 +275,7 @@ entryLocateEntry(GinBtree btree, GinBtreeStack *stack)
 				maxoff;
 	IndexTuple	itup = NULL;
 	int			result;
-	Page		page = BufferGetPage(stack->buffer);
+	Page		page = BufferGetPage(btree->index->rd_smgr,stack->buffer);
 
 	Assert(!GinPageIsLeaf(page));
 	Assert(!GinPageIsData(page));
@@ -346,7 +346,7 @@ entryLocateEntry(GinBtree btree, GinBtreeStack *stack)
 static bool
 entryLocateLeafEntry(GinBtree btree, GinBtreeStack *stack)
 {
-	Page		page = BufferGetPage(stack->buffer);
+	Page		page = BufferGetPage(btree->index->rd_smgr,stack->buffer);
 	OffsetNumber low,
 				high;
 
@@ -462,7 +462,7 @@ entryIsEnoughSpace(GinBtree btree, Buffer buf, OffsetNumber off,
 {
 	Size		releasedsz = 0;
 	Size		addedsz;
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(btree->index->rd_smgr,buf);
 
 	Assert(insertData->entry);
 	Assert(!GinPageIsData(page));
@@ -557,7 +557,7 @@ entryExecPlaceToPage(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 					 void *ptp_workspace)
 {
 	GinBtreeEntryInsertData *insertData = insertPayload;
-	Page		page = BufferGetPage(buf);
+	Page		page = BufferGetPage(btree->index->rd_smgr,buf);
 	OffsetNumber off = stack->off;
 	OffsetNumber placed;
 
@@ -613,8 +613,8 @@ entrySplitPage(GinBtree btree, Buffer origbuf,
 	char	   *ptr;
 	IndexTuple	itup;
 	Page		page;
-	Page		lpage = PageGetTempPageCopy(BufferGetPage(origbuf));
-	Page		rpage = PageGetTempPageCopy(BufferGetPage(origbuf));
+	Page		lpage = PageGetTempPageCopy(BufferGetPage(btree->index->rd_smgr,origbuf));
+	Page		rpage = PageGetTempPageCopy(BufferGetPage(btree->index->rd_smgr,origbuf));
 	Size		pageSize = PageGetPageSize(lpage);
 	PGAlignedBlock tupstore[2]; /* could need 2 pages' worth of tuples */
 
@@ -700,7 +700,7 @@ static void *
 entryPrepareDownlink(GinBtree btree, Buffer lbuf)
 {
 	GinBtreeEntryInsertData *insertData;
-	Page		lpage = BufferGetPage(lbuf);
+	Page		lpage = BufferGetPage(btree->index->rd_smgr,lbuf);
 	BlockNumber lblkno = BufferGetBlockNumber(lbuf);
 	IndexTuple	itup;
 

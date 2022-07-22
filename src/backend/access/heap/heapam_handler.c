@@ -1046,7 +1046,7 @@ heapam_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 	Assert(TTS_IS_BUFFERTUPLE(slot));
 
 	hslot = (BufferHeapTupleTableSlot *) slot;
-	targpage = BufferGetPage(hscan->rs_cbuf);
+	targpage = BufferGetPage(scan->rs_rd->rd_smgr,hscan->rs_cbuf);
 	maxoffset = PageGetMaxOffsetNumber(targpage);
 
 	/* Inner loop over all tuples on the selected page */
@@ -1388,7 +1388,7 @@ heapam_index_build_range_scan(Relation heapRelation,
 		 */
 		if (hscan->rs_cblock != root_blkno)
 		{
-			Page		page = BufferGetPage(hscan->rs_cbuf);
+			Page		page = BufferGetPage(hscan->rs_base.rs_rd->rd_smgr,hscan->rs_cbuf);
 
 			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 			heap_get_root_tuples(page, root_offsets);
@@ -1686,7 +1686,7 @@ heapam_index_build_range_scan(Relation heapRelation,
 			 */
 			if (root_offsets[offnum - 1] == InvalidOffsetNumber)
 			{
-				Page	page = BufferGetPage(hscan->rs_cbuf);
+				Page	page = BufferGetPage(scan->rs_rd->rd_smgr,hscan->rs_cbuf);
 
 				LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 				heap_get_root_tuples(page, root_offsets);
@@ -1852,7 +1852,7 @@ heapam_index_validate_scan(Relation heapRelation,
 		 */
 		if (hscan->rs_cblock != root_blkno)
 		{
-			Page		page = BufferGetPage(hscan->rs_cbuf);
+			Page		page = BufferGetPage(scan->rs_rd->rd_smgr,hscan->rs_cbuf);
 
 			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 			heap_get_root_tuples(page, root_offsets);
@@ -2302,7 +2302,7 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 		 * Bitmap is lossy, so we must examine each line pointer on the page.
 		 * But we can ignore HOT chains, since we'll check each tuple anyway.
 		 */
-		Page		dp = (Page) BufferGetPage(buffer);
+		Page		dp = (Page) BufferGetPage(scan->rs_rd->rd_smgr,buffer);
 		OffsetNumber maxoff = PageGetMaxOffsetNumber(dp);
 		OffsetNumber offnum;
 
@@ -2355,7 +2355,7 @@ heapam_scan_bitmap_next_tuple(TableScanDesc scan,
 		return false;
 
 	targoffset = hscan->rs_vistuples[hscan->rs_cindex];
-	dp = (Page) BufferGetPage(hscan->rs_cbuf);
+	dp = (Page) BufferGetPage(scan->rs_rd->rd_smgr,hscan->rs_cbuf);
 	lp = PageGetItemId(dp, targoffset);
 	Assert(ItemIdIsNormal(lp));
 
@@ -2473,7 +2473,7 @@ heapam_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 	if (!pagemode)
 		LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-	page = (Page) BufferGetPage(hscan->rs_cbuf);
+	page = (Page) BufferGetPage(scan->rs_rd->rd_smgr,hscan->rs_cbuf);
 	all_visible = PageIsAllVisible(page) &&
 		!scan->rs_snapshot->takenDuringRecovery;
 	maxoffset = PageGetMaxOffsetNumber(page);
