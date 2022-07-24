@@ -184,10 +184,9 @@ typedef struct BufferDesc
 	pg_atomic_uint32 state;
 
 	int			wait_backend_pid;	/* backend PID of pin-count waiter */
-	int			freeNext;		/* link in freelist chain */
+	int			freeNext;		/* link in freelist chain *///为保证这个结构体小于64字节，PM模式下重用这个变量用作保存时间戳
 
 	LWLock		content_lock;	/* to lock access to buffer contents */
-	PageXLogRecPtr lsn;
 } BufferDesc;
 
 /*
@@ -309,12 +308,13 @@ extern void ScheduleBufferTagForWriteback(WritebackContext *context, BufferTag *
 /* freelist.c */
 extern BufferDesc *StrategyGetBuffer(BufferAccessStrategy strategy,
 									 uint32 *buf_state);
-extern BufferDesc *StrategyGetBuffer2(PageHeader page,BufferDesc *old_buf,bool *foundPtr);
+extern BufferDesc *StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_state);
 extern void StrategyFreeBuffer(BufferDesc *buf);
 extern bool StrategyRejectBuffer(BufferAccessStrategy strategy,
 								 BufferDesc *buf);
 
 extern int	StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc);
+extern uint32 StrategySyncStart2();
 extern void StrategyNotifyBgWriter(int bgwprocno);
 
 extern Size StrategyShmemSize(void);

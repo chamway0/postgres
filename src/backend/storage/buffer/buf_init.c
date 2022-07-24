@@ -138,13 +138,16 @@ InitBufferPool(void)
 			pg_atomic_init_u32(&buf->state, (share_buffer_type == 1)?0:BM_VALID);
 			buf->wait_backend_pid = 0;
 
-			buf->buf_id = (share_buffer_type == 1)? i : -1;
+			buf->buf_id = i;
 
 			/*
 			 * Initially link all the buffers together as unused. Subsequent
 			 * management of this list is done by freelist.c.
 			 */
-			buf->freeNext = i + 1;
+			if(share_buffer_type == 1)
+				buf->freeNext = i + 1;
+			else
+				buf->freeNext = 0;//PM模式下用作保存时间戳		
 
 			LWLockInitialize(BufferDescriptorGetContentLock(buf),
 							 LWTRANCHE_BUFFER_CONTENT);

@@ -161,6 +161,7 @@ typedef struct PageHeaderData
 	uint16		pd_pagesize_version;
 	TransactionId pd_prune_xid; /* oldest prunable XID, or zero if none */
 	uint32		pd_bufid;//存放BufferDesc数组下标，用于PM模式下
+	uint32		pd_timestamp;//分配bufid的时间戳
 	ItemIdData	pd_linp[FLEXIBLE_ARRAY_MEMBER]; /* line pointer array */
 } PageHeaderData;
 

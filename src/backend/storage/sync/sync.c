@@ -260,6 +260,7 @@ void AbsorbSyncRequests2(int flags)
 	XLogRecPtr	recptr;
 	Block		bufBlock;
 	SMgrRelation reln;
+	uint32		totalAllocBuffers;
 
 	/*
 	 * Unless this is a shutdown checkpoint or we have been explicitly told,
@@ -271,7 +272,10 @@ void AbsorbSyncRequests2(int flags)
 		mask |= BM_PERMANENT;
 
 
-	for (buf_id = 0; buf_id < NBuffers; buf_id++)
+	totalAllocBuffers = StrategySyncStart2();
+	elog(LOG,"###start sync,totalAllocBuffers=%d",totalAllocBuffers);
+	buf_id = (share_buffer_type == 1) ? 0 : 1;
+	for (; buf_id < totalAllocBuffers; buf_id++)
 	{
 		bufHdr = GetBufferDescriptor(buf_id);
 

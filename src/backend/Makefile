@@ -53,7 +53,7 @@ endif
 
 ##########################################################################
 #PMem
-LIBS += -L$(top_builddir)/install/lib/
+LIBS += -L$(top_builddir)/../install/lib/
 LIBS += -lpmem
 ##########################################################################
 #LIBS += -L/mnt/nvmedir/postgres_nvme/gperftools-gperftools-2.10/install/lib

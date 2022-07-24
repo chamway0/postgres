@@ -715,9 +715,15 @@ void
 	}
 	else if( rnode )
 	{
-		Assert( (reln.smgr_rnode.node.spcNode == rnode->spcNode) &&
-				(reln.smgr_rnode.node.dbNode == rnode->dbNode) &&
-				(reln.smgr_rnode.node.relNode == rnode->relNode) );
+		if(!( (reln->smgr_rnode.node.spcNode == rnode->spcNode) &&
+			  (reln->smgr_rnode.node.dbNode == rnode->dbNode) &&
+			  (reln->smgr_rnode.node.relNode == rnode->relNode) 
+			) 
+		)
+		{
+			reln = smgropen(*rnode, InvalidBackendId);
+			elog(ERROR,"###smgrlocation oid:%u",rnode->relNode);
+		}
 	}
 	
 	return smgrsw[reln->smgr_which].smgr_location(reln, forknum,nblocks);

@@ -40,6 +40,7 @@ typedef struct
 
 	int			firstFreeBuffer;	/* Head of list of unused buffers */
 	int			lastFreeBuffer; /* Tail of list of unused buffers */
+	uint32		*freeList;//the list of unused buffer 
 
 	/*
 	 * NOTE: lastFreeBuffer is undefined when firstFreeBuffer is -1 (that is,
@@ -358,36 +359,32 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 }
 
 BufferDesc *
-StrategyGetBuffer2(PageHeader page,BufferDesc *old_buf,bool *foundPtr)
+StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_state)
 {
 	BufferDesc *buf = NULL;
-	bool need = false;
 
 	/* Acquire the spinlock to remove element from the freelist */
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-	if (StrategyControl->firstFreeBuffer < 0)
+	if ( page->pd_bufid == old_id )
 	{
-		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-		elog(ERROR,"no free buffer id");
-		return NULL;
-	}
-
-	need = old_buf ? (old_buf->buf_id < 0 || !( old_buf->lsn.xrecoff == page->pd_lsn.xrecoff && old_buf->lsn.xlogid == page->pd_lsn.xlogid)) :
-					 (page->pd_bufid <= 0);
-
-	if ( need )
-	{
+		if (StrategyControl->firstFreeBuffer < 0)
+		{
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			elog(ERROR,"no free buffer id");
+			return NULL;
+		}	
+			
 		buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
-		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
 		
-		buf->lsn = page->pd_lsn;
-		buf->buf_id = StrategyControl->firstFreeBuffer;
-		page->pd_bufid = buf->buf_id;
+		buf->freeNext = time(NULL);
+		page->pd_bufid = StrategyControl->firstFreeBuffer;
+		page->pd_timestamp = buf->freeNext;
 
 		/* Unconditionally remove buffer from freelist */
-		StrategyControl->firstFreeBuffer = buf->freeNext;
-		buf->freeNext = FREENEXT_NOT_IN_LIST;
+		StrategyControl->firstFreeBuffer = StrategyControl->freeList[StrategyControl->firstFreeBuffer];
+
+		*buf_state = LockBufHdr(buf);
 	}
 	
 	/*
@@ -402,7 +399,10 @@ StrategyGetBuffer2(PageHeader page,BufferDesc *old_buf,bool *foundPtr)
 		buf = GetBufferDescriptor(page->pd_bufid);
 	}
 	else
+	{
 		*foundPtr = false;
+		pg_atomic_fetch_add_u32(&StrategyControl->numBufferAllocs, 1);
+	}
 
 	return buf;
 }
@@ -419,12 +419,25 @@ StrategyFreeBuffer(BufferDesc *buf)
 	 * It is possible that we are told to put something in the freelist that
 	 * is already in it; don't screw up the list if so.
 	 */
-	if (buf->freeNext == FREENEXT_NOT_IN_LIST)
+	if (share_buffer_type == 1)
 	{
-		buf->freeNext = StrategyControl->firstFreeBuffer;
-		if (buf->freeNext < 0)
+		if (buf->freeNext == FREENEXT_NOT_IN_LIST)
+		{
+			buf->freeNext = StrategyControl->firstFreeBuffer;
+			if (buf->freeNext < 0)
+				StrategyControl->lastFreeBuffer = buf->buf_id;
+			StrategyControl->firstFreeBuffer = buf->buf_id;
+		}
+	}
+	else
+	{
+		buf->freeNext = 0;
+		if (StrategyControl->firstFreeBuffer < 0)
 			StrategyControl->lastFreeBuffer = buf->buf_id;
-		StrategyControl->firstFreeBuffer = buf->buf_id;
+		
+		StrategyControl->freeList[buf->buf_id] = StrategyControl->firstFreeBuffer;
+		StrategyControl->firstFreeBuffer = buf->buf_id;	
+		elog(LOG,"###Free Buffer,%d",buf->buf_id);
 	}
 
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
@@ -469,7 +482,11 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 	return result;
 }
-
+uint32
+StrategySyncStart2()
+{
+	return pg_atomic_read_u32(&StrategyControl->numBufferAllocs);
+}
 /*
  * StrategyNotifyBgWriter -- set or clear allocation notification latch
  *
@@ -509,7 +526,13 @@ StrategyShmemSize(void)
 	size = add_size(size, BufTableShmemSize(NBuffers + NUM_BUFFER_PARTITIONS));
 
 	/* size of the shared replacement strategy control block */
-	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
+	if(share_buffer_type == 1)
+		size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
+	else
+	{
+		size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
+		size = add_size(size, mul_size(NBuffers,sizeof(uint32)));
+	}
 
 	return size;
 }
@@ -543,7 +566,7 @@ StrategyInitialize(bool init)
 	 */
 	StrategyControl = (BufferStrategyControl *)
 		ShmemInitStruct("Buffer Strategy Status",
-						sizeof(BufferStrategyControl),
+						sizeof(BufferStrategyControl) + NBuffers*sizeof(uint32),
 						&found);
 
 	if (!found)
@@ -559,7 +582,20 @@ StrategyInitialize(bool init)
 		 * Grab the whole linked list of free buffers for our strategy. We
 		 * assume it was previously set up by InitBufferPool().
 		 */
-		StrategyControl->firstFreeBuffer = (share_buffer_type == 1)? 0 : 1;//PM模式从第2个buffer开始分配，PageHeader里pd_bufid为0是判断为无效
+		if(share_buffer_type == 2)
+		{
+			int i;
+			StrategyControl->freeList = (uint32*)(StrategyControl + 1);
+			StrategyControl->firstFreeBuffer = 1;//PM模式从第2个buffer开始分配，方便PageHeader里pd_bufid为0时判断为无效
+			for (i = 0; i < NBuffers; i++)
+			{
+				StrategyControl->freeList[i] = i+1;
+			}
+			StrategyControl->freeList[NBuffers-1] = FREENEXT_END_OF_LIST;
+		}
+		else
+			StrategyControl->firstFreeBuffer = 0;
+
 		StrategyControl->lastFreeBuffer = NBuffers - 1;
 
 		/* Initialize the clock sweep pointer */
