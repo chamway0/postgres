@@ -65,7 +65,7 @@ PageInit(Page page, Size pageSize, Size specialSize)
 		}
 		else
 		{
-			PmemFileMemset((char *) p, 0, pageSize);
+			MemSet(p, 0, pageSize);//有可能是非PM上的页面，比如PageGetTempPage是从内存分配临时页面
 		}
 
 	}

@@ -863,7 +863,7 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if(isLocalBuf)
 			{
 				bufBlock = LocalBufHdrGetBlock(bufHdr);
-				PmemFileMemset((char *) bufBlock, 0, BLCKSZ);
+				MemSet((char *) bufBlock, 0, BLCKSZ);
 			}
 			else
 			{
