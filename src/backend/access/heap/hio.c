@@ -208,6 +208,7 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 		Buffer		buffer;
 		Page		page;
 		Size		freespace;
+		PageHeader  header;
 
 		/*
 		 * Extend by one page.  This should generally match the main-line
@@ -219,9 +220,14 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 		page = BufferGetPage(relation->rd_smgr,buffer);
 
 		if (!PageIsNew(page))
+		{
+			header = (PageHeader)page;
+			elog(ERROR,"###PageHeader page:%d , bufid %u timestamp:%u. bufferdesc:%d",BufferGetBlockNumber(buffer),header->pd_bufid,header->pd_timestamp,GetBufferDescriptor(buffer-1)->buf_id);
+
 			elog(ERROR, "page %u of relation \"%s\" should be empty but is not",
 				 BufferGetBlockNumber(buffer),
 				 RelationGetRelationName(relation));
+		}
 
 		/*
 		 * Add the page to the FSM without initializing. If we were to
@@ -605,9 +611,14 @@ loop:
 	page = BufferGetPage(relation->rd_smgr,buffer);
 
 	if (!PageIsNew(page))
+	{
+		PageHeader header;
+		header = (PageHeader)page;
+		elog(ERROR,"###PageHeader22 bufid %u timestamp:%u. bufferdesc:%d",header->pd_bufid,header->pd_timestamp,GetBufferDescriptor(buffer-1)->buf_id);
 		elog(ERROR, "page %u of relation \"%s\" should be empty but is not",
 			 BufferGetBlockNumber(buffer),
 			 RelationGetRelationName(relation));
+	}
 
 	PageInit(page, BufferGetPageSize(buffer), 0);
 	MarkBufferDirty(buffer);

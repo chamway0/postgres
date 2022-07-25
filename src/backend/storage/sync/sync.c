@@ -324,7 +324,7 @@ void AbsorbSyncRequests2(int flags)
 		* skip the flush if the buffer isn't permanent.
 		*/
 		if (buf_state & BM_PERMANENT)
-			XLogFlush(recptr);
+			//XLogFlush(recptr); //暂时屏蔽，有问题
 
 		
 		//chamway-计算校验和，暂时先屏蔽

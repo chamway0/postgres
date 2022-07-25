@@ -21,6 +21,7 @@
 #include "storage/checksum.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
+#include "miscadmin.h"
 
 
 /* GUC variable */
@@ -49,7 +50,25 @@ PageInit(Page page, Size pageSize, Size specialSize)
 	Assert(pageSize > specialSize + SizeOfPageHeaderData);
 
 	/* Make sure all fields of page are zero, as well as unused space */
-	MemSet(p, 0, pageSize);
+	if(share_buffer_type == 1)
+		MemSet(p, 0, pageSize);
+	else
+	{
+		uint32 buf_id = p->pd_bufid;
+		if( buf_id > 0 )
+		{
+			uint32 timestamp = p->pd_timestamp;
+
+			PmemFileMemset((char *) p, 0, pageSize);
+			p->pd_bufid = buf_id;
+			p->pd_timestamp = timestamp;
+		}
+		else
+		{
+			PmemFileMemset((char *) p, 0, pageSize);
+		}
+
+	}
 
 	p->pd_flags = 0;
 	p->pd_lower = SizeOfPageHeaderData;

@@ -722,7 +722,7 @@ void
 		)
 		{
 			reln = smgropen(*rnode, InvalidBackendId);
-			elog(ERROR,"###smgrlocation oid:%u",rnode->relNode);
+			elog(LOG,"###smgrlocation oid:%u,forknum:%d",rnode->relNode,forknum);
 		}
 	}
 	

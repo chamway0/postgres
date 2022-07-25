@@ -757,10 +757,10 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 							relpath(smgr->smgr_rnode, forkNum),
 							P_NEW)));
 		
-		// MemSet(zerobuffer, 0, BLCKSZ);
+		MemSet(zerobuffer, 0, BLCKSZ);
 
-		// /* don't set checksum for all-zero page */
-		// smgrextend(smgr, forkNum, blockNum, zerobuffer, false);
+		/* don't set checksum for all-zero page */
+		smgrextend(smgr, forkNum, blockNum, zerobuffer, false);
 	}
 
 	if (isLocalBuf)
@@ -854,15 +854,29 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	if (!isExtend)
 	{
-		// bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(smgr,bufHdr);
+		/*
+			* Read in the page, unless the caller intends to overwrite it and
+			* just wants us to allocate a buffer.
+			*/
+		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+		{
+			if(isLocalBuf)
+			{
+				bufBlock = LocalBufHdrGetBlock(bufHdr);
+				PmemFileMemset((char *) bufBlock, 0, BLCKSZ);
+			}
+			else
+			{
+				PageHeader header = BlockNumGetPageHeader(smgr,forkNum,blockNum);
+				uint32 buf_id = header->pd_bufid;
+				uint32 timestamp = header->pd_timestamp;
 
-		// /*
-		// 	* Read in the page, unless the caller intends to overwrite it and
-		// 	* just wants us to allocate a buffer.
-		// 	*/
-		// if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
-		// 	PmemFileMemset((char *) bufBlock, 0, BLCKSZ);
-		// else
+				PmemFileMemset((char *) header, 0, BLCKSZ);
+				header->pd_bufid = buf_id;
+				header->pd_timestamp = timestamp;
+			}
+		}
+		else
 		{
 			/* chamway-验证校验和可能需要加content共享锁，先屏蔽 */
 			// if (!PageIsVerifiedExtended((Page) bufBlock, blockNum,
