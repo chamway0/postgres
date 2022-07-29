@@ -1409,6 +1409,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	Page		page;
 	BTPageOpaque opaque;
+	static BTPageOpaqueData opaqueTemp;
 	OffsetNumber minoff;
 	OffsetNumber maxoff;
 	int			itemIndex;
@@ -1422,7 +1423,13 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	Assert(BufferIsValid(so->currPos.buf));
 
 	page = BufferGetPage(scan->indexRelation->rd_smgr,so->currPos.buf);
-	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	if(share_buffer_type == 1)
+		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	else
+	{
+		opaqueTemp = *((BTPageOpaque) PageGetSpecialPointer(page));
+		opaque = &opaqueTemp;
+	}
 
 	/* allow next page be processed by parallel worker */
 	if (scan->parallel_scan)

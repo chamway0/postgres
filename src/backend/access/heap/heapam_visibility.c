@@ -962,7 +962,16 @@ static bool
 HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 					   Buffer buffer)
 {
-	HeapTupleHeader tuple = htup->t_data;
+	HeapTupleHeader tuple;// = htup->t_data;
+	static HeapTupleHeaderData tupleTemp;
+
+	if(share_buffer_type == 1)
+		tuple = htup->t_data;
+	else
+	{
+		tupleTemp = *(htup->t_data);
+		tuple = &tupleTemp;
+	}
 
 	Assert(ItemPointerIsValid(&htup->t_self));
 	Assert(htup->t_tableOid != InvalidOid);

@@ -65,6 +65,7 @@ extern int	checkpoint_flush_after;
 extern int	backend_flush_after;
 extern int	bgwriter_flush_after;
 
+extern  char**pmem_block_addr;
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
 
@@ -132,10 +133,8 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 		LocalBufferBlockPointers[-(buffer) - 1] \
 	: \
 		((share_buffer_type == 1)? ((Block) (BufferBlocks + ((Size) ((buffer) - 1)) * BLCKSZ)) : \
-			( smgrlocation( reln,\
-				(GetBufferDescriptor((buffer) - 1))->tag.forkNum,\
-				(GetBufferDescriptor((buffer) - 1))->tag.blockNum,\
-				&((GetBufferDescriptor((buffer) - 1))->tag.rnode)) ) ) \
+								   ((Block) (pmem_block_addr[(buffer) - 1])) \
+		)\
 )
 
 /*
@@ -167,7 +166,7 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(reln,bufHdr)	(share_buffer_type == 1)? ((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ)) : \
-( smgrlocation( reln,(bufHdr)->tag.forkNum,(bufHdr)->tag.blockNum,&(bufHdr)->tag.rnode) )    //根据BufferDesc获取页面地址
+( (Block)(pmem_block_addr[(bufHdr)->buf_id]))    //根据BufferDesc获取页面地址
 
 #define BufferGetLSN(reln,bufHdr)	(PageGetLSN(BufHdrGetBlock(reln,bufHdr)))
 

@@ -139,6 +139,9 @@ static bool IsForInput;
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
+//PM页面映射地址缓存
+char**pmem_block_addr = NULL;
+
 /*
  * Backend-Private refcount management:
  *
@@ -1688,6 +1691,15 @@ retry:
 
 	return buf;
 }
+typedef union{
+	struct 
+	{
+		uint32 buf_id;
+		uint32 timestamp;
+	};
+	uint64 bufid;
+}BUFID;
+
 static BufferDesc *
 BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			BlockNumber blockNum,
@@ -1698,14 +1710,17 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	BufferDesc *buf;
 	uint32		buf_state;
 	PageHeader  pageHeader;
-	uint32      buf_id;
+	BUFID      buf_id;
 
 	*foundPtr = false;
 
-	pageHeader = BlockNumGetPageHeader(smgr,forkNum,blockNum);
-	buf_id = pageHeader->pd_bufid;
+	// if(pmem_block_addr == NULL)
+	// 	pmem_block_addr = (char**)malloc(NBuffers*sizeof(char*));
 
-	if( buf_id == 0 || buf_id >= NBuffers)
+	pageHeader = BlockNumGetPageHeader(smgr,forkNum,blockNum);
+	buf_id = *((BUFID*)&pageHeader->pd_bufid);
+
+	if( buf_id.buf_id == 0 || buf_id.buf_id >= NBuffers)
 	{
 		//没分配过
 		/*
@@ -1714,16 +1729,17 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		*/
 		ReservePrivateRefCountEntry();
 
-		buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state);
+		buf = StrategyGetBuffer2(pageHeader,buf_id.buf_id,foundPtr,&buf_state);
 	}
 	else
 	{
 		//检查是否是数据库重新启动过PM中遗留的bufid,重新赋值
-		buf = GetBufferDescriptor(buf_id);
-		if( (buf->freeNext > 0) && (buf->freeNext == pageHeader->pd_timestamp) )
+		buf = GetBufferDescriptor(buf_id.buf_id);
+		if( (buf->freeNext > 0) && (buf->freeNext == buf_id.timestamp) )
 		{
 			PinBuffer(buf, strategy);
 			*foundPtr = true;	
+			pmem_block_addr[buf->buf_id] = (char*)pageHeader;
 			return buf;		
 		}
 		else
@@ -1734,7 +1750,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			*/
 			ReservePrivateRefCountEntry();
 
-			buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state);
+			buf = StrategyGetBuffer2(pageHeader,buf_id.buf_id,foundPtr,&buf_state);
 		}
 	}
 
@@ -1742,6 +1758,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	if(*foundPtr)
 	{
 		PinBuffer(buf, strategy);
+		pmem_block_addr[buf->buf_id] = (char*)pageHeader;
 		return buf;	
 	}
 
@@ -1775,7 +1792,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		buf_state |=  BM_PERMANENT ;
 
 	PinBuffer_Locked3(buf, buf_state);
-
+	pmem_block_addr[buf->buf_id] = (char*)pageHeader;
 	return buf;
 }
 static bool

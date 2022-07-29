@@ -126,6 +126,9 @@ InitBufferPool(void)
 	{
 		int			i;
 
+		if( share_buffer_type == 2)
+			pmem_block_addr = (char**)malloc(NBuffers*sizeof(char*));
+
 		/*
 		 * Initialize all the buffer headers.
 		 */
@@ -147,7 +150,10 @@ InitBufferPool(void)
 			if(share_buffer_type == 1)
 				buf->freeNext = i + 1;
 			else
-				buf->freeNext = 0;//PM模式下用作保存时间戳		
+			{
+				buf->freeNext = 0;//PM模式下用作保存时间戳	
+				pmem_block_addr[i] = (char*)NULL;
+			}	
 
 			LWLockInitialize(BufferDescriptorGetContentLock(buf),
 							 LWTRANCHE_BUFFER_CONTENT);

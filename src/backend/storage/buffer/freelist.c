@@ -413,14 +413,13 @@ StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_sta
 void
 StrategyFreeBuffer(BufferDesc *buf)
 {
-	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-
 	/*
 	 * It is possible that we are told to put something in the freelist that
 	 * is already in it; don't screw up the list if so.
 	 */
 	if (share_buffer_type == 1)
 	{
+		SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 		if (buf->freeNext == FREENEXT_NOT_IN_LIST)
 		{
 			buf->freeNext = StrategyControl->firstFreeBuffer;
@@ -428,19 +427,22 @@ StrategyFreeBuffer(BufferDesc *buf)
 				StrategyControl->lastFreeBuffer = buf->buf_id;
 			StrategyControl->firstFreeBuffer = buf->buf_id;
 		}
+		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 	}
 	else
 	{
+		SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 		buf->freeNext = 0;
 		if (StrategyControl->firstFreeBuffer < 0)
 			StrategyControl->lastFreeBuffer = buf->buf_id;
 		
 		StrategyControl->freeList[buf->buf_id] = StrategyControl->firstFreeBuffer;
 		StrategyControl->firstFreeBuffer = buf->buf_id;	
+
+		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		pg_atomic_fetch_sub_u32(&StrategyControl->numBufferAllocs, 1);
 		elog(LOG,"###Free Buffer,%d",buf->buf_id);
 	}
-
-	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 /*
@@ -522,12 +524,13 @@ StrategyShmemSize(void)
 {
 	Size		size = 0;
 
-	/* size of lookup hash table ... see comment in StrategyInitialize */
-	size = add_size(size, BufTableShmemSize(NBuffers + NUM_BUFFER_PARTITIONS));
-
 	/* size of the shared replacement strategy control block */
 	if(share_buffer_type == 1)
+	{
+		/* size of lookup hash table ... see comment in StrategyInitialize */
+		size = add_size(size, BufTableShmemSize(NBuffers + NUM_BUFFER_PARTITIONS));
 		size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
+	}
 	else
 	{
 		size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
@@ -559,7 +562,8 @@ StrategyInitialize(bool init)
 	 * happening in each partition concurrently, so we could need as many as
 	 * NBuffers + NUM_BUFFER_PARTITIONS entries.
 	 */
-	InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
+	if(share_buffer_type == 1)
+		InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
 
 	/*
 	 * Get or create the shared strategy control block
