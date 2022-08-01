@@ -2178,7 +2178,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS
 		},
 		&NPmemBlocks,
-		4194304, 0, INT_MAX / 2,
+		0, 0, INT_MAX / 2,
 		NULL, NULL, NULL
 	},
 	{
