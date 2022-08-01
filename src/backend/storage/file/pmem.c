@@ -120,7 +120,10 @@ PmemFileOpenPerm(const char *pathname, int flags, int mode, size_t fsize,
 void
 PmemFileWrite(void *dest, void *src, size_t len)
 {
-	pmem_memcpy_nodrain((void *) dest, src, len);
+	if( len <= 64 )//小于64字节时memcpy性能更优
+		memcpy((void *) dest, src, len);
+	else
+		pmem_memcpy_nodrain((void *) dest, src, len);
 }
 
 void
@@ -150,7 +153,10 @@ PmemFileClose(void *addr, size_t fsize)
 void
 PmemFileMemset(void *addr, int c, size_t len)
 {
-	pmem_memset_nodrain((void *) addr, 0, len);
+	if( len <= 64 )
+		memset((void *) addr, 0, len);
+	else
+		pmem_memset_nodrain((void *) addr, 0, len);
 }
 
 #else
