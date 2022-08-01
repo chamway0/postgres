@@ -119,8 +119,10 @@
 
 # - Memory -
 share_buffer_type = 1  #1：all on dram  2: data page on pm 
-#shared_buffers = 32MB			# min 128kB
+#shared_buffers = 32MB			# share_buffer_type为1时最小128kB，share_buffer_type为2时此值代表索引缓冲区的大小、如设置0表示关闭索引缓冲区直接PM
 					# (change requires restart)
+#pmem_blocks = 128GB			# share_buffer_type为1时必须为0,share_buffer_type为2时最小为总数据量大小
+					# (change requires restart)					
 #huge_pages = try			# on, off, or try
 					# (change requires restart)
 #temp_buffers = 8MB			# min 800kB

@@ -66,6 +66,7 @@ extern int	backend_flush_after;
 extern int	bgwriter_flush_after;
 
 extern  char**pmem_block_addr;
+extern  uint32* pmem_block_desc;
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
 
@@ -115,9 +116,14 @@ extern PGDLLIMPORT int32 *LocalRefCount;
  */
 #define BufferIsValid(bufnum) \
 ( \
-	AssertMacro((bufnum) <= NBuffers && (bufnum) >= -NLocBuffer), \
+	AssertMacro((bufnum) <= (NBuffers+NPmemBlocks) && (bufnum) >= -NLocBuffer), \
 	(bufnum) != InvalidBuffer  \
 )
+
+/*根据SMgrRelation frokNum blockNum获取对应的BufferDesc数组下标*/
+#define BlockNumGetPageHeader(reln,forkNum,blockNum) ((PageHeader)(smgrlocation( reln,forkNum,blockNum,NULL)))
+#define IsPmemDescId(bufid) (bufid > NBuffers)
+#define BufferIdToPmemDescId(bufid) (AssertMacro(IsPmemDescId(bufid)),(bufid-NBuffers))
 
 /*
  * BufferGetBlock
@@ -132,8 +138,10 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 	BufferIsLocal(buffer) ? \
 		LocalBufferBlockPointers[-(buffer) - 1] \
 	: \
-		((share_buffer_type == 1)? ((Block) (BufferBlocks + ((Size) ((buffer) - 1)) * BLCKSZ)) : \
-								   ((Block) (pmem_block_addr[(buffer) - 1])) \
+		(IsPmemDescId((buffer) - 1) ? \
+			((Block) (pmem_block_addr[BufferIdToPmemDescId((buffer) - 1)])) \
+		: \
+			((Block) (BufferBlocks + ((Size) ((buffer) - 1)) * BLCKSZ)) \
 		)\
 )
 
@@ -165,14 +173,9 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
-#define BufHdrGetBlock(reln,bufHdr)	(share_buffer_type == 1)? ((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ)) : \
-( (Block)(pmem_block_addr[(bufHdr)->buf_id]))    //根据BufferDesc获取页面地址
+#define BufHdrGetBlock(reln,bufHdr)	( IsPmemDescId((bufHdr)->buf_id) ? ((Block)(pmem_block_addr[BufferIdToPmemDescId((bufHdr)->buf_id)])) : ((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ)) )
 
 #define BufferGetLSN(reln,bufHdr)	(PageGetLSN(BufHdrGetBlock(reln,bufHdr)))
-
-/*根据SMgrRelation frokNum blockNum获取对应的BufferDesc数组下标*/
-#define BlockNumGetPageHeader(reln,forkNum,blockNum) ((PageHeader)(smgrlocation( reln,forkNum,blockNum,NULL)))
-#define BlockNumGetBufferId(reln,forkNum,blockNum) ((BlockNumGetPageHeader( reln,forkNum,blockNum))->pd_bufid)
 
 /*
  * prototypes for functions in bufmgr.c

@@ -1423,14 +1423,14 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	Assert(BufferIsValid(so->currPos.buf));
 
 	page = BufferGetPage(scan->indexRelation->rd_smgr,so->currPos.buf);
-	if(share_buffer_type == 1)
-		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	else
+	if(IsPmemDescId(so->currPos.buf))
 	{
 		opaqueTemp = *((BTPageOpaque) PageGetSpecialPointer(page));
 		opaque = &opaqueTemp;
 	}
-
+	else
+		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+		
 	/* allow next page be processed by parallel worker */
 	if (scan->parallel_scan)
 	{

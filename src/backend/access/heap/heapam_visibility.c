@@ -965,13 +965,13 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 	HeapTupleHeader tuple;// = htup->t_data;
 	static HeapTupleHeaderData tupleTemp;
 
-	if(share_buffer_type == 1)
-		tuple = htup->t_data;
-	else
+	if(IsPmemDescId(buffer))
 	{
 		tupleTemp = *(htup->t_data);
 		tuple = &tupleTemp;
 	}
+	else
+		tuple = htup->t_data;
 
 	Assert(ItemPointerIsValid(&htup->t_self));
 	Assert(htup->t_tableOid != InvalidOid);

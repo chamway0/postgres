@@ -223,7 +223,7 @@ typedef union BufferDescPadded
 #define BufferDescriptorGetBuffer(bdesc) ((bdesc)->buf_id + 1)
 
 #define BufferDescriptorGetIOLock(bdesc) \
-	(&(BufferIOLWLockArray[(bdesc)->buf_id]).lock)
+	(AssertMacro(!IsPmemDescId((bdesc)->buf_id)),(&(BufferIOLWLockArray[(bdesc)->buf_id]).lock))
 #define BufferDescriptorGetContentLock(bdesc) \
 	((LWLock*) (&(bdesc)->content_lock))
 

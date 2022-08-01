@@ -169,11 +169,14 @@ extern PGDLLIMPORT char *DataDir;
 extern PGDLLIMPORT int data_directory_mode;
 
 extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int NPmemBlocks;
 extern PGDLLIMPORT int share_buffer_type;
 extern PGDLLIMPORT int MaxBackends;
 extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;
 extern PGDLLIMPORT int max_parallel_workers;
+
+#define HAVE_BUFFER_BLOCKS ( (share_buffer_type == 1) || (NBuffers > 0) )
 
 extern PGDLLIMPORT int MyProcPid;
 extern PGDLLIMPORT pg_time_t MyStartTime;

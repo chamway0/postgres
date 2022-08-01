@@ -76,10 +76,10 @@ InitBufferPool(void)
 	/* Align descriptors to a cacheline boundary. */
 	BufferDescriptors = (BufferDescPadded *)
 		ShmemInitStruct("Buffer Descriptors",
-						NBuffers * sizeof(BufferDescPadded),
+						(NBuffers+NPmemBlocks) * sizeof(BufferDescPadded),
 						&foundDescs);
 
-	if(share_buffer_type == 1)
+	if(HAVE_BUFFER_BLOCKS)
 	{
 		BufferBlocks = (char *)
 			ShmemInitStruct("Buffer Blocks",
@@ -93,10 +93,6 @@ InitBufferPool(void)
 
 		LWLockRegisterTranche(LWTRANCHE_BUFFER_IO_IN_PROGRESS, "buffer_io");
 	}
-	else
-	{
-		elog(LOG,"InitBufferPool:Buffer Blocks on pmem");
-	}
 
 	LWLockRegisterTranche(LWTRANCHE_BUFFER_CONTENT, "buffer_content");
 
@@ -107,13 +103,20 @@ InitBufferPool(void)
 	 * the checkpointer is restarted, memory allocation failures would be
 	 * painful.
 	 */
-	if(share_buffer_type == 1)
+	if(HAVE_BUFFER_BLOCKS)
 	{
 		CkptBufferIds = (CkptSortItem *)
 			ShmemInitStruct("Checkpoint BufferIds",
 							NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
 	}
-
+	
+	if(share_buffer_type == 2)
+	{
+		if(NBuffers > 0)
+			elog(LOG,"InitBufferPool:Index Buffer Blocks on dram, Data Buffer Blocks on pmem");
+		else
+			elog(LOG,"InitBufferPool:All Buffer Blocks on pmem");
+	}
 
 	if (foundDescs || foundBufs || foundIOLocks || foundBufCkpt)
 	{
@@ -127,18 +130,22 @@ InitBufferPool(void)
 		int			i;
 
 		if( share_buffer_type == 2)
-			pmem_block_addr = (char**)malloc(NBuffers*sizeof(char*));
+			pmem_block_addr = (char**)malloc(NPmemBlocks*sizeof(char*));
 
 		/*
 		 * Initialize all the buffer headers.
 		 */
-		for (i = 0; i < NBuffers; i++)
+		for (i = 0; i < NBuffers+NPmemBlocks; i++)
 		{
 			BufferDesc *buf = GetBufferDescriptor(i);
 
 			CLEAR_BUFFERTAG(buf->tag);
 
-			pg_atomic_init_u32(&buf->state, (share_buffer_type == 1)?0:BM_VALID);
+			if(i < NBuffers)
+				pg_atomic_init_u32(&buf->state, 0);
+			else
+				pg_atomic_init_u32(&buf->state, BM_VALID);//PM上的页面永远具有valid标志
+
 			buf->wait_backend_pid = 0;
 
 			buf->buf_id = i;
@@ -147,18 +154,12 @@ InitBufferPool(void)
 			 * Initially link all the buffers together as unused. Subsequent
 			 * management of this list is done by freelist.c.
 			 */
-			if(share_buffer_type == 1)
-				buf->freeNext = i + 1;
-			else
-			{
-				buf->freeNext = 0;//PM模式下用作保存时间戳	
-				pmem_block_addr[i] = (char*)NULL;
-			}	
+			buf->freeNext = i + 1;
 
 			LWLockInitialize(BufferDescriptorGetContentLock(buf),
 							 LWTRANCHE_BUFFER_CONTENT);
 
-			if( share_buffer_type == 1)
+			if(i < NBuffers && HAVE_BUFFER_BLOCKS)
 			{
 				LWLockInitialize(BufferDescriptorGetIOLock(buf),
 								LWTRANCHE_BUFFER_IO_IN_PROGRESS);
@@ -168,6 +169,7 @@ InitBufferPool(void)
 
 		/* Correct last entry of linked list */
 		GetBufferDescriptor(NBuffers - 1)->freeNext = FREENEXT_END_OF_LIST;
+		GetBufferDescriptor(NBuffers + NPmemBlocks - 1)->freeNext = FREENEXT_END_OF_LIST;
 	}
 
 	/* Init other shared buffer-management stuff */
@@ -190,11 +192,11 @@ BufferShmemSize(void)
 	Size		size = 0;
 
 	/* size of buffer descriptors */
-	size = add_size(size, mul_size(NBuffers, sizeof(BufferDescPadded)));
+	size = add_size(size, mul_size(NBuffers+NPmemBlocks, sizeof(BufferDescPadded)));
 	/* to allow aligning buffer descriptors */
 	size = add_size(size, PG_CACHE_LINE_SIZE);
 
-	if(share_buffer_type == 1 )
+	if(HAVE_BUFFER_BLOCKS)
 	{
 		/* size of data pages */
 		size = add_size(size, mul_size(NBuffers, BLCKSZ));
@@ -212,7 +214,7 @@ BufferShmemSize(void)
 	 * locks are not highly contended, we lay out the array with minimal
 	 * padding.
 	 */
-	if(share_buffer_type == 1 )
+	if(HAVE_BUFFER_BLOCKS)
 	{
 		size = add_size(size, mul_size(NBuffers, sizeof(LWLockMinimallyPadded)));
 

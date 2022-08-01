@@ -40,7 +40,7 @@ typedef struct
 
 	int			firstFreeBuffer;	/* Head of list of unused buffers */
 	int			lastFreeBuffer; /* Tail of list of unused buffers */
-	uint32		*freeList;//the list of unused buffer 
+	int			firstFreePmemBlockDesc;//空闲PMem页面描述符链表头
 
 	/*
 	 * NOTE: lastFreeBuffer is undefined when firstFreeBuffer is -1 (that is,
@@ -53,6 +53,7 @@ typedef struct
 	 */
 	uint32		completePasses; /* Complete cycles of the clock sweep */
 	pg_atomic_uint32 numBufferAllocs;	/* Buffers allocated since last reset */
+	pg_atomic_uint32 numPmemBlockAllocs;	/* pmem blocks allocated */
 
 	/*
 	 * Bgworker process to be notified upon activity or -1 if none. See
@@ -362,27 +363,31 @@ BufferDesc *
 StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_state)
 {
 	BufferDesc *buf = NULL;
+	int timestamp = time(NULL);
 
 	/* Acquire the spinlock to remove element from the freelist */
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
 	if ( page->pd_bufid == old_id )
 	{
-		if (StrategyControl->firstFreeBuffer < 0)
+		if (StrategyControl->firstFreePmemBlockDesc < 0)
 		{
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-			elog(ERROR,"no free buffer id");
+			elog(ERROR,"no free pmem block id");
 			return NULL;
 		}	
 			
-		buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
-		
-		buf->freeNext = time(NULL);
-		page->pd_bufid = StrategyControl->firstFreeBuffer;
-		page->pd_timestamp = buf->freeNext;
+		buf = GetBufferDescriptor(StrategyControl->firstFreePmemBlockDesc);
+		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
 
 		/* Unconditionally remove buffer from freelist */
-		StrategyControl->firstFreeBuffer = StrategyControl->freeList[StrategyControl->firstFreeBuffer];
+		StrategyControl->firstFreePmemBlockDesc = buf->freeNext;
+		buf->freeNext = FREENEXT_NOT_IN_LIST;		
+
+		//保存buf_id和timestamp到PM页面头
+		pmem_block_desc[BufferIdToPmemDescId(buf->buf_id)] = timestamp;
+		page->pd_bufid = buf->buf_id;
+		page->pd_timestamp = timestamp;
 
 		*buf_state = LockBufHdr(buf);
 	}
@@ -401,7 +406,7 @@ StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_sta
 	else
 	{
 		*foundPtr = false;
-		pg_atomic_fetch_add_u32(&StrategyControl->numBufferAllocs, 1);
+		pg_atomic_fetch_add_u32(&StrategyControl->numPmemBlockAllocs, 1);
 	}
 
 	return buf;
@@ -417,7 +422,7 @@ StrategyFreeBuffer(BufferDesc *buf)
 	 * It is possible that we are told to put something in the freelist that
 	 * is already in it; don't screw up the list if so.
 	 */
-	if (share_buffer_type == 1)
+	if (buf->buf_id < NBuffers)
 	{
 		SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 		if (buf->freeNext == FREENEXT_NOT_IN_LIST)
@@ -432,15 +437,13 @@ StrategyFreeBuffer(BufferDesc *buf)
 	else
 	{
 		SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
-		buf->freeNext = 0;
-		if (StrategyControl->firstFreeBuffer < 0)
-			StrategyControl->lastFreeBuffer = buf->buf_id;
-		
-		StrategyControl->freeList[buf->buf_id] = StrategyControl->firstFreeBuffer;
-		StrategyControl->firstFreeBuffer = buf->buf_id;	
-
+		if (buf->freeNext == FREENEXT_NOT_IN_LIST)
+		{
+			buf->freeNext = StrategyControl->firstFreePmemBlockDesc;
+			StrategyControl->firstFreePmemBlockDesc = buf->buf_id;
+		}
 		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-		pg_atomic_fetch_sub_u32(&StrategyControl->numBufferAllocs, 1);
+		pg_atomic_fetch_sub_u32(&StrategyControl->numPmemBlockAllocs, 1);
 		elog(LOG,"###Free Buffer,%d",buf->buf_id);
 	}
 }
@@ -487,7 +490,7 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 uint32
 StrategySyncStart2()
 {
-	return pg_atomic_read_u32(&StrategyControl->numBufferAllocs);
+	return pg_atomic_read_u32(&StrategyControl->numPmemBlockAllocs);
 }
 /*
  * StrategyNotifyBgWriter -- set or clear allocation notification latch
@@ -524,18 +527,16 @@ StrategyShmemSize(void)
 {
 	Size		size = 0;
 
-	/* size of the shared replacement strategy control block */
-	if(share_buffer_type == 1)
-	{
-		/* size of lookup hash table ... see comment in StrategyInitialize */
+	/* size of lookup hash table ... see comment in StrategyInitialize */
+	if(HAVE_BUFFER_BLOCKS)
 		size = add_size(size, BufTableShmemSize(NBuffers + NUM_BUFFER_PARTITIONS));
-		size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
-	}
-	else
-	{
-		size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
-		size = add_size(size, mul_size(NBuffers,sizeof(uint32)));
-	}
+
+	/* size of the shared replacement strategy control block */
+	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
+
+	//PM页面描述符时间戳
+	if(share_buffer_type == 2)
+		size = add_size(size, mul_size(NPmemBlocks,sizeof(uint32)));
 
 	return size;
 }
@@ -562,7 +563,7 @@ StrategyInitialize(bool init)
 	 * happening in each partition concurrently, so we could need as many as
 	 * NBuffers + NUM_BUFFER_PARTITIONS entries.
 	 */
-	if(share_buffer_type == 1)
+	if(HAVE_BUFFER_BLOCKS)
 		InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
 
 	/*
@@ -570,7 +571,7 @@ StrategyInitialize(bool init)
 	 */
 	StrategyControl = (BufferStrategyControl *)
 		ShmemInitStruct("Buffer Strategy Status",
-						sizeof(BufferStrategyControl) + NBuffers*sizeof(uint32),
+						sizeof(BufferStrategyControl) + NPmemBlocks*sizeof(uint32),
 						&found);
 
 	if (!found)
@@ -586,20 +587,7 @@ StrategyInitialize(bool init)
 		 * Grab the whole linked list of free buffers for our strategy. We
 		 * assume it was previously set up by InitBufferPool().
 		 */
-		if(share_buffer_type == 2)
-		{
-			int i;
-			StrategyControl->freeList = (uint32*)(StrategyControl + 1);
-			StrategyControl->firstFreeBuffer = 1;//PM模式从第2个buffer开始分配，方便PageHeader里pd_bufid为0时判断为无效
-			for (i = 0; i < NBuffers; i++)
-			{
-				StrategyControl->freeList[i] = i+1;
-			}
-			StrategyControl->freeList[NBuffers-1] = FREENEXT_END_OF_LIST;
-		}
-		else
-			StrategyControl->firstFreeBuffer = 0;
-
+		StrategyControl->firstFreeBuffer = 0;
 		StrategyControl->lastFreeBuffer = NBuffers - 1;
 
 		/* Initialize the clock sweep pointer */
@@ -608,9 +596,22 @@ StrategyInitialize(bool init)
 		/* Clear statistics */
 		StrategyControl->completePasses = 0;
 		pg_atomic_init_u32(&StrategyControl->numBufferAllocs, 0);
+		pg_atomic_init_u32(&StrategyControl->numPmemBlockAllocs, 0);
 
 		/* No pending notification */
 		StrategyControl->bgwprocno = -1;
+
+		//初始化PMem页面描述符空闲链表
+		if(share_buffer_type == 2)
+		{
+			int i;
+			pmem_block_desc = (uint32*)(StrategyControl + 1);
+			StrategyControl->firstFreePmemBlockDesc = NBuffers+1;//链表头从NBuffers+1开始
+			for (i = 0; i < NPmemBlocks; i++)
+			{
+				pmem_block_desc[i] = 0;
+			}
+		}
 	}
 	else
 		Assert(!init);

@@ -957,7 +957,7 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 	FileTag		tag;
 
 	//在PM上去掉注册请求到checkpoint
-	if( share_buffer_type == 2)
+	if( !HAVE_BUFFER_BLOCKS)
 		return;
 		
 	INIT_MD_FILETAG(tag, reln->smgr_rnode.node, forknum, seg->mdfd_segno);
@@ -993,7 +993,7 @@ register_unlink_segment(RelFileNodeBackend rnode, ForkNumber forknum,
 	Assert(!RelFileNodeBackendIsTemp(rnode));
 
 	//在PM上去掉注册请求到checkpoint
-	if( share_buffer_type == 2)
+	if(!HAVE_BUFFER_BLOCKS)
 	{
 		char		path[MAXPGPATH];
 		if( mdunlinkfiletag(&tag,path) < 0)
@@ -1026,7 +1026,7 @@ register_forget_request(RelFileNodeBackend rnode, ForkNumber forknum,
 	FileTag		tag;
 
 	//在PM上去掉注册请求到checkpoint
-	if( share_buffer_type == 2)
+	if(!HAVE_BUFFER_BLOCKS)
 		return;
 
 	INIT_MD_FILETAG(tag, rnode.node, forknum, segno);
@@ -1044,7 +1044,7 @@ ForgetDatabaseSyncRequests(Oid dbid)
 	RelFileNode rnode;
 
 	//在PM上去掉注册请求到checkpoint
-	if( share_buffer_type == 2)
+	if(!HAVE_BUFFER_BLOCKS)
 		return;
 
 	rnode.dbNode = dbid;

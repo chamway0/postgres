@@ -260,7 +260,7 @@ void AbsorbSyncRequests2(int flags)
 	XLogRecPtr	recptr;
 	Block		bufBlock;
 	SMgrRelation reln;
-	uint32		totalAllocBuffers;
+	uint32		totalAllocPmemBlocks;
 
 	/*
 	 * Unless this is a shutdown checkpoint or we have been explicitly told,
@@ -272,10 +272,9 @@ void AbsorbSyncRequests2(int flags)
 		mask |= BM_PERMANENT;
 
 
-	totalAllocBuffers = StrategySyncStart2();
-	elog(LOG,"###start sync,totalAllocBuffers=%d",totalAllocBuffers);
-	buf_id = (share_buffer_type == 1) ? 0 : 1;
-	for (; buf_id < totalAllocBuffers; buf_id++)
+	totalAllocPmemBlocks = StrategySyncStart2();
+	elog(LOG,"###start sync,totalAllocPmemBlocks=%d",totalAllocPmemBlocks);
+	for (buf_id=NBuffers+1; buf_id < NBuffers+1+totalAllocPmemBlocks; buf_id++)
 	{
 		bufHdr = GetBufferDescriptor(buf_id);
 
@@ -426,9 +425,9 @@ ProcessSyncRequests(int flags)
 	 * queued an fsync request before clearing the buffer's dirtybit, so we
 	 * are safe as long as we do an Absorb after completing BufferSync().
 	 */
-	if(share_buffer_type == 1)
-		AbsorbSyncRequests();
-	else
+	AbsorbSyncRequests();
+
+	if(share_buffer_type == 2)//将Pmem blocks标记了脏页的合并到hash table中
 		AbsorbSyncRequests2(flags);
 
 	/*
@@ -708,7 +707,7 @@ RegisterSyncRequest(const FileTag *ftag, SyncRequestType type,
 	bool		ret;
 
 	//在PM上去掉注册sync请求到checkpoint
-	if( share_buffer_type == 2)
+	if(!HAVE_BUFFER_BLOCKS)
 		return true;
 		
 	if (pendingOps != NULL)

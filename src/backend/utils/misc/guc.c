@@ -2168,10 +2168,19 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS
 		},
 		&NBuffers,
-		1024, 16, INT_MAX / 2,
+		1024, 0, INT_MAX / 2,
 		NULL, NULL, NULL
 	},
-
+	{
+		{"pmem_blocks", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of pmem blocks used by the server."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&NPmemBlocks,
+		4194304, 0, INT_MAX / 2,
+		NULL, NULL, NULL
+	},
 	{
 		{"temp_buffers", PGC_USERSET, RESOURCES_MEM,
 			gettext_noop("Sets the maximum number of temporary buffers used by each session."),

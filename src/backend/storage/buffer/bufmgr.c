@@ -55,10 +55,8 @@
 #include "lib/profiler.h"
 
 
-// /* Note: these two macros only work on shared buffers, not local ones! */
-/* #define BufHdrGetBlock(bufHdr)	(share_buffer_type == 1)? ((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ)) : \
- 			( smgrlocation( NULL,(bufHdr)->tag.forkNum,(bufHdr)->tag.blockNum,&(bufHdr)->tag.rnode) )    //根据BufferDesc获取页面地址
-*/
+/* Note: these two macros only work on shared buffers, not local ones! */
+// #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ)))
 // #define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
 
 /* Note: this macro only works on local buffers, not shared ones! */
@@ -141,6 +139,8 @@ static BufferDesc *PinCountWaitBuf = NULL;
 
 //PM页面映射地址缓存
 char**pmem_block_addr = NULL;
+/*用于保存PM描述符分配的时间戳*/
+uint32* pmem_block_desc = NULL;
 
 /*
  * Backend-Private refcount management:
@@ -438,7 +438,7 @@ ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref)
 static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
 								ForkNumber forkNum, BlockNumber blockNum,
 								ReadBufferMode mode, BufferAccessStrategy strategy,
-								bool *hit);
+								bool *hit, bool isIndex);
 static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void PinBuffer_Locked3(BufferDesc *buf,uint32 buf_state);
@@ -548,7 +548,7 @@ void
 PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 {
 #ifdef USE_PREFETCH
-	if(share_buffer_type != 1)
+	if(share_buffer_type == 2)
 		return;
 		
 	Assert(RelationIsValid(reln));
@@ -685,7 +685,7 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 */
 	pgstat_count_buffer_read(reln);
 	buf = ReadBuffer_common(reln->rd_smgr, reln->rd_rel->relpersistence,
-							forkNum, blockNum, mode, strategy, &hit);
+							forkNum, blockNum, mode, strategy, &hit, (reln->rd_index != NULL));
 	if (hit)
 		pgstat_count_buffer_hit(reln);
 	return buf;
@@ -713,7 +713,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 	Assert(InRecovery);
 
 	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
-							 mode, strategy, &hit);
+							 mode, strategy, &hit, false);
 }
 
 /*
@@ -870,7 +870,7 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			}
 			else
 			{
-				PageHeader header = BlockNumGetPageHeader(smgr,forkNum,blockNum);
+				PageHeader header = BufHdrGetBlock(smgr,bufHdr);
 				uint32 buf_id = header->pd_bufid;
 				uint32 timestamp = header->pd_timestamp;
 
@@ -943,7 +943,7 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 static Buffer
 ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
-				  BufferAccessStrategy strategy, bool *hit)
+				  BufferAccessStrategy strategy, bool *hit, bool isIndex)
 {
 	BufferDesc *bufHdr;
 	Block		bufBlock;
@@ -951,7 +951,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	bool		isExtend;
 	bool		isLocalBuf = SmgrIsTemp(smgr);
 
-	if(share_buffer_type == 2)
+	if(share_buffer_type == 2 && (!isIndex || NBuffers<=0) )
 		return ReadBuffer_common2(smgr,relpersistence,forkNum,blockNum,mode,strategy,hit);
 
 	*hit = false;
@@ -1290,7 +1290,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		*foundPtr = true;
 
-		if (!valid && (share_buffer_type==1))
+		if (!valid)
 		{
 			/*
 			 * We can only get here if (a) someone else is still reading in
@@ -1348,7 +1348,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 * won't prevent hint-bit updates).  We will recheck the dirty bit
 		 * after re-locking the buffer header.
 		 */
-		if ((oldFlags & BM_DIRTY) && (share_buffer_type == 1))
+		if ((oldFlags & BM_DIRTY))
 		{
 			/*
 			 * We need a share-lock on the buffer contents to write it out
@@ -1502,7 +1502,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 			*foundPtr = true;
 
-			if (!valid && (share_buffer_type == 1))
+			if (!valid)
 			{
 				/*
 				 * We can only get here if (a) someone else is still reading
@@ -1562,12 +1562,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * just like permanent relations.
 	 */
 	buf->tag = newTag;
-	if( share_buffer_type == 1)
-		buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
-				   BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
-				   BUF_USAGECOUNT_MASK);
-	else
-		buf_state &= ~(BM_DIRTY | BM_JUST_DIRTIED |
+	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
 				BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
 				BUF_USAGECOUNT_MASK);
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
@@ -1691,14 +1686,6 @@ retry:
 
 	return buf;
 }
-typedef union{
-	struct 
-	{
-		uint32 buf_id;
-		uint32 timestamp;
-	};
-	uint64 bufid;
-}BUFID;
 
 static BufferDesc *
 BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
@@ -1710,36 +1697,33 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	BufferDesc *buf;
 	uint32		buf_state;
 	PageHeader  pageHeader;
-	BUFID      buf_id;
+	uint32      buf_id;
 
 	*foundPtr = false;
 
-	// if(pmem_block_addr == NULL)
-	// 	pmem_block_addr = (char**)malloc(NBuffers*sizeof(char*));
-
 	pageHeader = BlockNumGetPageHeader(smgr,forkNum,blockNum);
-	buf_id = *((BUFID*)&pageHeader->pd_bufid);
+	buf_id = pageHeader->pd_bufid;
 
-	if( buf_id.buf_id == 0 || buf_id.buf_id >= NBuffers)
+	if( (buf_id <= NBuffers) || (buf_id >= (NBuffers+NPmemBlocks)) )
 	{
-		//没分配过
 		/*
 		* Ensure, while the spinlock's not yet held, that there's a free
 		* refcount entry.
 		*/
 		ReservePrivateRefCountEntry();
 
-		buf = StrategyGetBuffer2(pageHeader,buf_id.buf_id,foundPtr,&buf_state);
+		buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state);
 	}
 	else
 	{
 		//检查是否是数据库重新启动过PM中遗留的bufid,重新赋值
-		buf = GetBufferDescriptor(buf_id.buf_id);
-		if( (buf->freeNext > 0) && (buf->freeNext == buf_id.timestamp) )
+		int timestamp = pmem_block_desc[BufferIdToPmemDescId(buf_id)];
+		if( (timestamp > 0) && (timestamp == pageHeader->pd_timestamp) )
 		{
+			buf = GetBufferDescriptor(buf_id);
 			PinBuffer(buf, strategy);
 			*foundPtr = true;	
-			pmem_block_addr[buf->buf_id] = (char*)pageHeader;
+			pmem_block_addr[BufferIdToPmemDescId(buf_id)] = (char*)pageHeader;
 			return buf;		
 		}
 		else
@@ -1750,7 +1734,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			*/
 			ReservePrivateRefCountEntry();
 
-			buf = StrategyGetBuffer2(pageHeader,buf_id.buf_id,foundPtr,&buf_state);
+			buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state);
 		}
 	}
 
@@ -1758,7 +1742,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	if(*foundPtr)
 	{
 		PinBuffer(buf, strategy);
-		pmem_block_addr[buf->buf_id] = (char*)pageHeader;
+		pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
 		return buf;	
 	}
 
@@ -1792,7 +1776,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		buf_state |=  BM_PERMANENT ;
 
 	PinBuffer_Locked3(buf, buf_state);
-	pmem_block_addr[buf->buf_id] = (char*)pageHeader;
+	pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
 	return buf;
 }
 static bool
@@ -1922,7 +1906,7 @@ InvalidateBuffer(BufferDesc *buf)
 	uint32		oldFlags;
 	uint32		buf_state;
 
-	if(share_buffer_type == 2 )
+	if(IsPmemDescId(buf->buf_id))
 		return InvalidateBuffer2(buf);
 
 	/* Save the original buffer tag before dropping the spinlock */
@@ -1975,7 +1959,7 @@ retry:
 		/* safety check: should definitely not be our *own* pin */
 		if (GetPrivateRefCount(BufferDescriptorGetBuffer(buf)) > 0)
 			elog(ERROR, "buffer is pinned in InvalidateBuffer");
-		if(share_buffer_type == 1)WaitIO(buf);
+		WaitIO(buf);
 		goto retry;
 	}
 
@@ -2338,7 +2322,8 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 
 		/* I'd better not still hold any locks on the buffer */
 		Assert(!LWLockHeldByMe(BufferDescriptorGetContentLock(buf)));
-		Assert(!LWLockHeldByMe(BufferDescriptorGetIOLock(buf)));
+		if(!IsPmemDescId(buf->buf_id))
+			Assert(!LWLockHeldByMe(BufferDescriptorGetIOLock(buf)));
 
 		/*
 		 * Decrement the shared reference count.
@@ -2420,7 +2405,7 @@ BufferSync(int flags)
 	int			mask = BM_DIRTY;
 	WritebackContext wb_context;
 
-	if( share_buffer_type == 2 )
+	if( !HAVE_BUFFER_BLOCKS)
 		return;
 
 	/* Make sure we can handle the pin inside SyncOneBuffer */
@@ -2719,7 +2704,7 @@ BgBufferSync(WritebackContext *wb_context)
 	uint32		new_recent_alloc;
 
 
-	if(share_buffer_type != 1)
+	if(share_buffer_type == 2)
 		return true;
 
 	/*
@@ -3823,9 +3808,6 @@ FlushRelationBuffers(Relation rel)
 	int			i;
 	BufferDesc *bufHdr;
 
-	if( share_buffer_type == 2)
-		return;
-
 	/* Open rel at the smgr level if not already done */
 	RelationOpenSmgr(rel);
 
@@ -3924,9 +3906,6 @@ FlushDatabaseBuffers(Oid dbid)
 	int			i;
 	BufferDesc *bufHdr;
 
-	if( share_buffer_type == 2)
-		return;
-
 	/* Make sure we can handle the pin inside the loop */
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 
@@ -3969,7 +3948,7 @@ FlushOneBuffer(Buffer buffer)
 {
 	BufferDesc *bufHdr;
 
-	if(share_buffer_type == 2)
+	if(IsPmemDescId(buffer))
 		return;
 
 	/* currently not needed, but no fundamental reason not to support */
@@ -4511,7 +4490,7 @@ IsBufferCleanupOK(Buffer buffer)
 static void
 WaitIO(BufferDesc *buf)
 {
-	if( share_buffer_type == 2)
+	if(IsPmemDescId(buf->buf_id))
 		return;
 	/*
 	 * Changed to wait until there's no IO - Inoue 01/13/2000
@@ -4562,7 +4541,7 @@ StartBufferIO(BufferDesc *buf, bool forInput)
 {
 	uint32		buf_state;
 
-	if( share_buffer_type == 2)
+	if(IsPmemDescId(buf->buf_id))
 		return true;
 
 	Assert(!InProgressBuf);
@@ -4632,7 +4611,7 @@ TerminateBufferIO(BufferDesc *buf, bool clear_dirty, uint32 set_flag_bits)
 {
 	uint32		buf_state;
 
-	if( share_buffer_type == 2)
+	if(IsPmemDescId(buf->buf_id))
 		return;
 
 	Assert(buf == InProgressBuf);
@@ -4667,10 +4646,7 @@ AbortBufferIO(void)
 {	
 	BufferDesc *buf = InProgressBuf;
 
-	if (share_buffer_type == 2)
-		return;
-
-	if (buf)
+	if (buf && !IsPmemDescId(buf->buf_id))
 	{
 		uint32		buf_state;
 
