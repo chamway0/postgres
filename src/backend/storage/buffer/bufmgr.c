@@ -438,7 +438,10 @@ ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref)
 static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
 								ForkNumber forkNum, BlockNumber blockNum,
 								ReadBufferMode mode, BufferAccessStrategy strategy,
-								bool *hit, bool isIndex);
+								bool *hit);
+static Buffer ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
+								BlockNumber blockNum, ReadBufferMode mode,
+								BufferAccessStrategy strategy, bool *hit);								
 static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void PinBuffer_Locked3(BufferDesc *buf,uint32 buf_state);
@@ -459,9 +462,9 @@ static BufferDesc *BufferAlloc(SMgrRelation smgr,
 							   BufferAccessStrategy strategy,
 							   bool *foundPtr);
 static BufferDesc *BufferAlloc2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
-			BlockNumber blockNum,
-			BufferAccessStrategy strategy,
-			bool *foundPtr);
+								BlockNumber blockNum,
+								BufferAccessStrategy strategy,
+								bool *foundPtr);
 static BufferDesc *BufferAlloc3(SMgrRelation smgr,
 							   char relpersistence,
 							   ForkNumber forkNum,
@@ -684,8 +687,13 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 * miss.
 	 */
 	pgstat_count_buffer_read(reln);
-	buf = ReadBuffer_common(reln->rd_smgr, reln->rd_rel->relpersistence,
-							forkNum, blockNum, mode, strategy, &hit, (reln->rd_index != NULL));
+
+	if(share_buffer_type == 2 && ((reln->rd_index == NULL) || NBuffers<=0) )
+		buf = ReadBuffer_common2(reln->rd_smgr, reln->rd_rel->relpersistence,
+								 forkNum, blockNum, mode, strategy, &hit);
+	else
+		buf = ReadBuffer_common(reln->rd_smgr, reln->rd_rel->relpersistence,
+								forkNum, blockNum, mode, strategy, &hit);
 	if (hit)
 		pgstat_count_buffer_hit(reln);
 	return buf;
@@ -713,7 +721,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 	Assert(InRecovery);
 
 	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
-							 mode, strategy, &hit, false);
+							 mode, strategy, &hit);
 }
 
 /*
@@ -943,16 +951,13 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 static Buffer
 ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
-				  BufferAccessStrategy strategy, bool *hit, bool isIndex)
+				  BufferAccessStrategy strategy, bool *hit)
 {
 	BufferDesc *bufHdr;
 	Block		bufBlock;
 	bool		found;
 	bool		isExtend;
 	bool		isLocalBuf = SmgrIsTemp(smgr);
-
-	if(share_buffer_type == 2 && (!isIndex || NBuffers<=0) )
-		return ReadBuffer_common2(smgr,relpersistence,forkNum,blockNum,mode,strategy,hit);
 
 	*hit = false;
 
