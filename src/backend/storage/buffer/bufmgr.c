@@ -2119,7 +2119,7 @@ ReleaseAndReadBuffer(Buffer buffer,
  * some callers to avoid an extra spinlock cycle.
  */
 static bool
-PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
+PinBuffer_LockHdr(BufferDesc *buf, BufferAccessStrategy strategy)
 {
 	Buffer		b = BufferDescriptorGetBuffer(buf);
 	bool		result;
@@ -2130,22 +2130,17 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 	if (ref == NULL)
 	{
 		uint32		buf_state;
-		uint32		old_buf_state;
 
 		ReservePrivateRefCountEntry();
 		ref = NewPrivateRefCountEntry(b);
 
-		old_buf_state = pg_atomic_read_u32(&buf->state);
-		for (;;)
+		buf_state = LockBufHdr(buf);
+
+		/* increase refcount */
+		buf_state += BUF_REFCOUNT_ONE;
+
+		if(!IsPmemDescId(buf->buf_id))
 		{
-			if (old_buf_state & BM_LOCKED)
-				old_buf_state = WaitBufHdrUnlocked(buf);
-
-			buf_state = old_buf_state;
-
-			/* increase refcount */
-			buf_state += BUF_REFCOUNT_ONE;
-
 			if (strategy == NULL)
 			{
 				/* Default case: increase usagecount unless already max. */
@@ -2161,14 +2156,8 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 				if (BUF_STATE_GET_USAGECOUNT(buf_state) == 0)
 					buf_state += BUF_USAGECOUNT_ONE;
 			}
-
-			if (pg_atomic_compare_exchange_u32(&buf->state, &old_buf_state,
-											   buf_state))
-			{
-				result = (buf_state & BM_VALID) != 0;
-				break;
-			}
 		}
+		UnlockBufHdr(buf,buf_state);
 	}
 	else
 	{
@@ -2180,6 +2169,79 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 	Assert(ref->refcount > 0);
 	ResourceOwnerRememberBuffer(CurrentResourceOwner, b);
 	return result;
+}
+static bool
+PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
+{
+	if(share_buffer_type == 2)
+	{
+		return PinBuffer_LockHdr(buf,strategy);
+	}
+	else
+	{
+		Buffer		b = BufferDescriptorGetBuffer(buf);
+		bool		result;
+		PrivateRefCountEntry *ref;
+
+		ref = GetPrivateRefCountEntry(b, true);
+
+		if (ref == NULL)
+		{
+			uint32		buf_state;
+			uint32		old_buf_state;
+
+			ReservePrivateRefCountEntry();
+			ref = NewPrivateRefCountEntry(b);
+
+			old_buf_state = pg_atomic_read_u32(&buf->state);
+			for (;;)
+			{
+				if (old_buf_state & BM_LOCKED)
+					old_buf_state = WaitBufHdrUnlocked(buf);
+
+				buf_state = old_buf_state;
+
+				/* increase refcount */
+				buf_state += BUF_REFCOUNT_ONE;
+
+				if (strategy == NULL)
+				{
+					/* Default case: increase usagecount unless already max. */
+					if (BUF_STATE_GET_USAGECOUNT(buf_state) < BM_MAX_USAGE_COUNT)
+						buf_state += BUF_USAGECOUNT_ONE;
+				}
+				else
+				{
+					/*
+					* Ring buffers shouldn't evict others from pool.  Thus we
+					* don't make usagecount more than 1.
+					*/
+					if (BUF_STATE_GET_USAGECOUNT(buf_state) == 0)
+						buf_state += BUF_USAGECOUNT_ONE;
+				}
+
+				if (pg_atomic_compare_exchange_u32(&buf->state, &old_buf_state,
+												buf_state))
+				{
+					result = (buf_state & BM_VALID) != 0;
+					break;
+				}
+			}
+		}
+		else
+		{
+			/* If we previously pinned the buffer, it must surely be valid */
+			result = true;
+		}
+
+		ref->refcount++;
+		Assert(ref->refcount > 0);
+		ResourceOwnerRememberBuffer(CurrentResourceOwner, b);
+
+		return result;
+	}
+
+	return true;
 }
 
 /*
@@ -2301,6 +2363,39 @@ PinBuffer_Locked3(BufferDesc *buf,uint32 buf_state)
  * Those that don't should pass fixOwner = false.
  */
 static void
+UnpinBuffer_LockHdr(BufferDesc *buf)
+{
+	uint32		buf_state;
+
+	/* I'd better not still hold any locks on the buffer */
+	Assert(!LWLockHeldByMe(BufferDescriptorGetContentLock(buf)));
+	if(!IsPmemDescId(buf->buf_id))
+		Assert(!LWLockHeldByMe(BufferDescriptorGetIOLock(buf)));
+
+	/*
+		* Decrement the shared reference count.
+		*
+		* Since buffer spinlock holder can update status using just write,
+		* it's not safe to use atomic decrement here; thus use a CAS loop.
+		*/
+	buf_state = LockBufHdr(buf);
+
+	buf_state -= BUF_REFCOUNT_ONE;
+
+	/* Support LockBufferForCleanup() */
+	if (buf_state & BM_PIN_COUNT_WAITER && BUF_STATE_GET_REFCOUNT(buf_state) == 1 )
+	{
+		/* we just released the last pin other than the waiter's */
+		int			wait_backend_pid = buf->wait_backend_pid;
+
+		buf_state &= ~BM_PIN_COUNT_WAITER;
+		UnlockBufHdr(buf, buf_state);
+		ProcSendSignal(wait_backend_pid);
+		return;		
+	}
+	UnlockBufHdr(buf, buf_state);
+}
+static void
 UnpinBuffer(BufferDesc *buf, bool fixOwner)
 {
 	PrivateRefCountEntry *ref;
@@ -2317,59 +2412,66 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 	ref->refcount--;
 	if (ref->refcount == 0)
 	{
-		uint32		buf_state;
-		uint32		old_buf_state;
-
-		/* I'd better not still hold any locks on the buffer */
-		Assert(!LWLockHeldByMe(BufferDescriptorGetContentLock(buf)));
-		if(!IsPmemDescId(buf->buf_id))
-			Assert(!LWLockHeldByMe(BufferDescriptorGetIOLock(buf)));
-
-		/*
-		 * Decrement the shared reference count.
-		 *
-		 * Since buffer spinlock holder can update status using just write,
-		 * it's not safe to use atomic decrement here; thus use a CAS loop.
-		 */
-		old_buf_state = pg_atomic_read_u32(&buf->state);
-		for (;;)
+		if(share_buffer_type == 2)
 		{
-			if (old_buf_state & BM_LOCKED)
-				old_buf_state = WaitBufHdrUnlocked(buf);
-
-			buf_state = old_buf_state;
-
-			buf_state -= BUF_REFCOUNT_ONE;
-
-			if (pg_atomic_compare_exchange_u32(&buf->state, &old_buf_state,
-											   buf_state))
-				break;
+			UnpinBuffer_LockHdr(buf);
 		}
-
-		/* Support LockBufferForCleanup() */
-		if (buf_state & BM_PIN_COUNT_WAITER)
+		else
 		{
+			uint32		buf_state;
+			uint32		old_buf_state;
+
+			/* I'd better not still hold any locks on the buffer */
+			Assert(!LWLockHeldByMe(BufferDescriptorGetContentLock(buf)));
+			if(!IsPmemDescId(buf->buf_id))
+				Assert(!LWLockHeldByMe(BufferDescriptorGetIOLock(buf)));
+
 			/*
-			 * Acquire the buffer header lock, re-check that there's a waiter.
-			 * Another backend could have unpinned this buffer, and already
-			 * woken up the waiter.  There's no danger of the buffer being
-			 * replaced after we unpinned it above, as it's pinned by the
-			 * waiter.
-			 */
-			buf_state = LockBufHdr(buf);
-
-			if ((buf_state & BM_PIN_COUNT_WAITER) &&
-				BUF_STATE_GET_REFCOUNT(buf_state) == 1)
+			* Decrement the shared reference count.
+			*
+			* Since buffer spinlock holder can update status using just write,
+			* it's not safe to use atomic decrement here; thus use a CAS loop.
+			*/
+			old_buf_state = pg_atomic_read_u32(&buf->state);
+			for (;;)
 			{
-				/* we just released the last pin other than the waiter's */
-				int			wait_backend_pid = buf->wait_backend_pid;
+				if (old_buf_state & BM_LOCKED)
+					old_buf_state = WaitBufHdrUnlocked(buf);
 
-				buf_state &= ~BM_PIN_COUNT_WAITER;
-				UnlockBufHdr(buf, buf_state);
-				ProcSendSignal(wait_backend_pid);
+				buf_state = old_buf_state;
+
+				buf_state -= BUF_REFCOUNT_ONE;
+
+				if (pg_atomic_compare_exchange_u32(&buf->state, &old_buf_state,
+												buf_state))
+					break;
 			}
-			else
-				UnlockBufHdr(buf, buf_state);
+
+			/* Support LockBufferForCleanup() */
+			if (buf_state & BM_PIN_COUNT_WAITER)
+			{
+				/*
+				* Acquire the buffer header lock, re-check that there's a waiter.
+				* Another backend could have unpinned this buffer, and already
+				* woken up the waiter.  There's no danger of the buffer being
+				* replaced after we unpinned it above, as it's pinned by the
+				* waiter.
+				*/
+				buf_state = LockBufHdr(buf);
+
+				if ((buf_state & BM_PIN_COUNT_WAITER) &&
+					BUF_STATE_GET_REFCOUNT(buf_state) == 1)
+				{
+					/* we just released the last pin other than the waiter's */
+					int			wait_backend_pid = buf->wait_backend_pid;
+
+					buf_state &= ~BM_PIN_COUNT_WAITER;
+					UnlockBufHdr(buf, buf_state);
+					ProcSendSignal(wait_backend_pid);
+				}
+				else
+					UnlockBufHdr(buf, buf_state);
+			}
 		}
 		ForgetPrivateRefCountEntry(ref);
 	}
