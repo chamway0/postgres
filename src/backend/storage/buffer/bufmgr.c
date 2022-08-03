@@ -1731,13 +1731,54 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			bool *foundPtr,bool isIndex)
 {
 	BufferTag	newTag;			/* identity of requested block */
+	uint32		newHash;
 	BufferDesc *buf;
 	uint32		buf_state;
 	PageHeader  pageHeader;
-	uint32      buf_id;
+	int         buf_id;
 	bool		bufid_valid = false;
 	bool		buffer_valid = false;
 
+	if (isIndex)
+	{
+		/* create a tag so we can lookup the buffer */
+		INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
+
+		/* determine its hash code and partition lock ID */
+		newHash = BufTableHashCode(&newTag);
+
+		buf_id = BufTableLookup(&newTag, newHash);
+
+		if(buf_id >= 0)
+		{
+			buf = GetBufferDescriptor(buf_id);
+			*foundPtr = true;
+
+			buffer_valid = PinBuffer(buf, strategy);
+
+			if (!buffer_valid)
+			{
+				/*
+				* We can only get here if (a) someone else is still reading in
+				* the page, or (b) a previous read attempt failed.  We have to
+				* wait for any active read attempt to finish, and then set up our
+				* own read attempt if the page is still not BM_VALID.
+				* StartBufferIO does it all.
+				*/
+				if (StartBufferIO(buf, true))
+				{
+					/*
+					* If we get here, previous attempts to read the buffer must
+					* have failed ... but we shall bravely try again.
+					*/
+					*foundPtr = false;
+				}
+			}
+
+			return buf;	
+		}
+	}
+	
 	pageHeader = BlockNumGetPageHeader(smgr,forkNum,blockNum);
 	buf_id = pageHeader->pd_bufid;
 
@@ -1831,6 +1872,10 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	if(IsPmemDescId(buf->buf_id))
 		pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
+	else
+	{
+		BufTableInsert(&newTag, newHash, &buf->buf_id);
+	}
 
 	return buf;
 }

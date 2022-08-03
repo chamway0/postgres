@@ -117,17 +117,35 @@ InitBufTable(int size)
 	{
 		HASHCTL		info;
 
-		/* assume no locking is needed yet */
+		if( share_buffer_type == 2)
+		{
+			/* Create the lookup hash table */
+			MemSet(&info, 0, sizeof(info));
+			info.keysize = sizeof(BufferTag);
+			info.entrysize = sizeof(BufferLookupEnt);
 
-		/* BufferTag maps to Buffer */
-		info.keysize = sizeof(BufferTag);
-		info.entrysize = sizeof(BufferLookupEnt);
-		info.num_partitions = NUM_BUFFER_PARTITIONS;
-
-		SharedBufHash = ShmemInitHash("Shared Buffer Lookup Table",
-									size, size,
+			SharedBufHash = hash_create("Shared Buffer Lookup Table",
+									size,
 									&info,
-									HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+									HASH_ELEM | HASH_BLOBS);
+
+			if (!SharedBufHash)
+				elog(ERROR, "could not initialize Shared buffer hash table");			
+		}
+		else
+		{
+			/* assume no locking is needed yet */
+
+			/* BufferTag maps to Buffer */
+			info.keysize = sizeof(BufferTag);
+			info.entrysize = sizeof(BufferLookupEnt);
+			info.num_partitions = NUM_BUFFER_PARTITIONS;
+
+			SharedBufHash = ShmemInitHash("Shared Buffer Lookup Table",
+										size, size,
+										&info,
+										HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+		}
 	}
 	else
 	{
