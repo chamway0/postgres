@@ -946,9 +946,19 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_EXCLUSIVE);
 	}
 
-	uint32	buf_state = pg_atomic_read_u32(&bufHdr->state);
-	buf_state |= BM_VALID;
-	PinBuffer_Locked3(bufHdr, buf_state);
+	if (isLocalBuf)
+	{
+		/* Only need to adjust flags */
+		uint32		buf_state = pg_atomic_read_u32(&bufHdr->state);
+
+		buf_state |= BM_VALID;
+		pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+	}
+	else
+	{
+		/* Set BM_VALID, terminate IO, and wake up any waiters */
+		TerminateBufferIO(bufHdr, false, BM_VALID);
+	}
 
 	VacuumPageMiss++;
 	if (VacuumCostActive)
@@ -1725,13 +1735,23 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	uint32		buf_state;
 	PageHeader  pageHeader;
 	uint32      buf_id;
-
-	*foundPtr = false;
+	bool		bufid_valid = false;
+	bool		buffer_valid = false;
 
 	pageHeader = BlockNumGetPageHeader(smgr,forkNum,blockNum);
 	buf_id = pageHeader->pd_bufid;
 
-	if( (buf_id <= 0) || (buf_id >= (NBuffers+NPmemBlocks)) )
+	if( (buf_id > 0) && (buf_id < (NBuffers+NPmemBlocks)) )
+	{
+		buf = GetBufferDescriptor(buf_id);
+		if( (buf->timestamp > 0) && (buf->timestamp == pageHeader->pd_timestamp) )
+		{
+			bufid_valid = true;
+			*foundPtr = true;
+		}
+	}
+
+	if(!bufid_valid)
 	{
 		/*
 		* Ensure, while the spinlock's not yet held, that there's a free
@@ -1739,54 +1759,41 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		*/
 		ReservePrivateRefCountEntry();
 
+		INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
+
+		//无效bufid，空闲链表中分配
 		buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state,isIndex);
 	}
-	else
-	{
-		//检查是否是数据库重新启动过PM中遗留的bufid,重新赋值
-		buf = GetBufferDescriptor(buf_id);
-		if( (buf->timestamp > 0) && (buf->timestamp == pageHeader->pd_timestamp) )
-		{
-			PinBuffer(buf, strategy);
-			*foundPtr = true;
-			
-			//保存Pmem block地址
-			if(IsPmemDescId(buf_id))
-				pmem_block_addr[BufferIdToPmemDescId(buf_id)] = (char*)pageHeader;
-
-			return buf;		
-		}
-		else
-		{
-			/*
-			* Ensure, while the spinlock's not yet held, that there's a free
-			* refcount entry.
-			*/
-			ReservePrivateRefCountEntry();
-
-			buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state,isIndex);
-		}
-	}
-
 
 	if(*foundPtr)
 	{
-		PinBuffer(buf, strategy);
+		buffer_valid = PinBuffer(buf, strategy);
 
+		if (!buffer_valid)
+		{
+			/*
+			* We can only get here if (a) someone else is still reading in
+			* the page, or (b) a previous read attempt failed.  We have to
+			* wait for any active read attempt to finish, and then set up our
+			* own read attempt if the page is still not BM_VALID.
+			* StartBufferIO does it all.
+			*/
+			if (StartBufferIO(buf, true))
+			{
+				/*
+				* If we get here, previous attempts to read the buffer must
+				* have failed ... but we shall bravely try again.
+				*/
+				*foundPtr = false;
+			}
+		}
+
+		//保存Pmem block地址
 		if(IsPmemDescId(buf->buf_id))
 			pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
 
 		return buf;	
 	}
-
-	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
-
-
-
-	/*
-		* Need to lock the buffer header too in order to change its tag.
-		*/
-	//buf_state = LockBufHdr(buf);
 
 	/*
 	 * Okay, it's finally safe to rename the buffer.
@@ -1802,13 +1809,25 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * just like permanent relations.
 	 */
 	buf->tag = newTag;
-	buf_state &= ~(BM_TAG_VALID | BM_DIRTY | BM_JUST_DIRTIED |
-			BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
-			BUF_USAGECOUNT_MASK);
+	if(!IsPmemDescId(buf->buf_id))
+		buf_state &= ~(BM_VALID | BM_TAG_VALID | BM_DIRTY | BM_JUST_DIRTIED | BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT | BUF_USAGECOUNT_MASK);
+	else
+		buf_state &= ~(BM_TAG_VALID | BM_DIRTY | BM_JUST_DIRTIED | BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT | BUF_USAGECOUNT_MASK);
+
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
 		buf_state |=  BM_PERMANENT ;
 
-	//PinBuffer_Locked3(buf, buf_state);
+	PinBuffer_Locked3(buf, buf_state);
+	
+	/*
+	 * Buffer contents are currently invalid.  Try to get the io_in_progress
+	 * lock.  If StartBufferIO returns false, then someone else managed to
+	 * read it before we did, so there's nothing left for BufferAlloc() to do.
+	 */
+	if (StartBufferIO(buf, true))
+		*foundPtr = false;
+	else
+		*foundPtr = true;
 
 	if(IsPmemDescId(buf->buf_id))
 		pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
@@ -2543,7 +2562,7 @@ BufferSync(int flags)
 	int			mask = BM_DIRTY;
 	WritebackContext wb_context;
 
-	if( !HAVE_BUFFER_BLOCKS)
+	if(share_buffer_type == 2)
 		return;
 
 	/* Make sure we can handle the pin inside SyncOneBuffer */
@@ -4680,7 +4699,7 @@ StartBufferIO(BufferDesc *buf, bool forInput)
 	uint32		buf_state;
 
 	if(IsPmemDescId(buf->buf_id))
-		return true;
+		return false;
 
 	Assert(!InProgressBuf);
 

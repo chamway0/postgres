@@ -427,8 +427,8 @@ ProcessSyncRequests(int flags)
 	 */
 	AbsorbSyncRequests();
 
-	if(share_buffer_type == 2)//将Pmem blocks标记了脏页的合并到hash table中
-		AbsorbSyncRequests2(flags);
+	//if(share_buffer_type == 2)//将Pmem blocks标记了脏页的合并到hash table中
+	//	AbsorbSyncRequests2(flags);
 
 	/*
 	 * To avoid excess fsync'ing (in the worst case, maybe a never-terminating
@@ -578,7 +578,7 @@ ProcessSyncRequests(int flags)
 	}							/* end loop over hashtable entries */
 
 	//将硬件Buffer刷下去
-	if(share_buffer_type == 2)
+	if(share_buffer_type == 2 && processed > 0)
 		PmemFileSync();
 
 	/* Return sync performance metrics for report at checkpoint end */
