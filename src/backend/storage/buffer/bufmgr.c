@@ -139,8 +139,6 @@ static BufferDesc *PinCountWaitBuf = NULL;
 
 //PM页面映射地址缓存
 char**pmem_block_addr = NULL;
-/*用于保存PM描述符分配的时间戳*/
-uint32* pmem_block_desc = NULL;
 
 /*
  * Backend-Private refcount management:
@@ -441,7 +439,7 @@ static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
 								bool *hit);
 static Buffer ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 								BlockNumber blockNum, ReadBufferMode mode,
-								BufferAccessStrategy strategy, bool *hit);								
+								BufferAccessStrategy strategy, bool *hit,bool isIndex);								
 static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void PinBuffer_Locked3(BufferDesc *buf,uint32 buf_state);
@@ -470,7 +468,7 @@ static BufferDesc *BufferAlloc3(SMgrRelation smgr,
 							   ForkNumber forkNum,
 							   BlockNumber blockNum,
 							   BufferAccessStrategy strategy,
-							   bool *foundPtr);					
+							   bool *foundPtr,bool isIndex);					
 static bool BufferAlloc_extend(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum);	   
 static void FlushBuffer(BufferDesc *buf, SMgrRelation reln);
 static void AtProcExit_Buffers(int code, Datum arg);
@@ -688,12 +686,13 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 */
 	pgstat_count_buffer_read(reln);
 
-	if(share_buffer_type == 2 && ((reln->rd_index == NULL) || NBuffers<=0) )
+	if(share_buffer_type == 2)
 		buf = ReadBuffer_common2(reln->rd_smgr, reln->rd_rel->relpersistence,
-								 forkNum, blockNum, mode, strategy, &hit);
+							forkNum, blockNum, mode, strategy, &hit,(reln->rd_index != NULL));
 	else
 		buf = ReadBuffer_common(reln->rd_smgr, reln->rd_rel->relpersistence,
-								forkNum, blockNum, mode, strategy, &hit);
+							forkNum, blockNum, mode, strategy, &hit);
+
 	if (hit)
 		pgstat_count_buffer_hit(reln);
 	return buf;
@@ -720,8 +719,12 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 
 	Assert(InRecovery);
 
-	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
-							 mode, strategy, &hit);
+	if( share_buffer_type == 2)
+		return ReadBuffer_common2(smgr, RELPERSISTENCE_PERMANENT,forkNum, blockNum, 
+								mode, strategy, &hit,false);	
+	else
+		return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
+								mode, strategy, &hit);
 }
 
 /*
@@ -732,7 +735,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 static Buffer
 ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
-				  BufferAccessStrategy strategy, bool *hit)
+				  BufferAccessStrategy strategy, bool *hit,bool isIndex)
 {
 	BufferDesc *bufHdr;
 	Block		bufBlock;
@@ -800,7 +803,7 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		// 	found  = BufferAlloc_extend( smgr,forkNum, blockNum);
 			
 		bufHdr = BufferAlloc3(smgr, relpersistence, forkNum, blockNum,
-							 strategy, &found);
+							 strategy, &found,isIndex);
 		// INSTR_TIME_SET_CURRENT(end_time);					 
 		// INSTR_TIME_SUBTRACT(end_time, start_time);
 		// elog(LOG,"BufferAlloc cost:%f",INSTR_TIME_GET_MILLISEC(end_time));
@@ -862,7 +865,7 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * again.
 	 */
 	//Assert(!(pg_atomic_read_u32(&bufHdr->state) & BM_VALID));	/* spinlock not needed */
-
+	bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(smgr,bufHdr);
 	if (!isExtend)
 	{
 		/*
@@ -871,14 +874,11 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			*/
 		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 		{
-			if(isLocalBuf)
-			{
-				bufBlock = LocalBufHdrGetBlock(bufHdr);
+			if(isLocalBuf || !IsPmemDescId(bufHdr->buf_id))
 				MemSet((char *) bufBlock, 0, BLCKSZ);
-			}
 			else
 			{
-				PageHeader header = BufHdrGetBlock(smgr,bufHdr);
+				PageHeader header = (PageHeader)bufBlock;
 				uint32 buf_id = header->pd_bufid;
 				uint32 timestamp = header->pd_timestamp;
 
@@ -887,28 +887,45 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				header->pd_timestamp = timestamp;
 			}
 		}
-		else
+		else if( isLocalBuf || !IsPmemDescId(bufHdr->buf_id) )
 		{
-			/* chamway-验证校验和可能需要加content共享锁，先屏蔽 */
+			instr_time	io_start,
+						io_time;
+
+			if (track_io_timing)
+				INSTR_TIME_SET_CURRENT(io_start);
+
+			smgrread(smgr, forkNum, blockNum, (char *) bufBlock);//加载磁盘上的内容到buffer
+
+			if (track_io_timing)
+			{
+				INSTR_TIME_SET_CURRENT(io_time);
+				INSTR_TIME_SUBTRACT(io_time, io_start);
+				pgstat_count_buffer_read_time(INSTR_TIME_GET_MICROSEC(io_time));
+				INSTR_TIME_ADD(pgBufferUsage.blk_read_time, io_time);
+			}
+
+			/* check for garbage data */
 			// if (!PageIsVerifiedExtended((Page) bufBlock, blockNum,
-			// 							PIV_LOG_WARNING | PIV_REPORT_STAT))
+			// 							PIV_LOG_WARNING | PIV_REPORT_STAT))//检查校验和
 			// {
 			// 	if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
 			// 	{
 			// 		ereport(WARNING,
 			// 				(errcode(ERRCODE_DATA_CORRUPTED),
-			// 					errmsg("invalid page in block %u of relation %s; zeroing out page",
+			// 				errmsg("invalid page in block %u of relation %s; zeroing out page",
 			// 						blockNum,
 			// 						relpath(smgr->smgr_rnode, forkNum))));
-			// 		PmemFileMemset((char *) bufBlock, 0, BLCKSZ);
+			// 		MemSet((char *) bufBlock, 0, BLCKSZ);
 			// 	}
 			// 	else
 			// 		ereport(ERROR,
 			// 				(errcode(ERRCODE_DATA_CORRUPTED),
-			// 					errmsg("invalid page in block %u of relation %s",
+			// 				errmsg("invalid page in block %u of relation %s",
 			// 						blockNum,
 			// 						relpath(smgr->smgr_rnode, forkNum))));
 			// }
+			
 		}
 	}
 	
@@ -929,6 +946,10 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_EXCLUSIVE);
 	}
 
+	uint32	buf_state = pg_atomic_read_u32(&bufHdr->state);
+	buf_state |= BM_VALID;
+	PinBuffer_Locked3(bufHdr, buf_state);
+
 	VacuumPageMiss++;
 	if (VacuumCostActive)
 		VacuumCostBalance += VacuumCostPageMiss;
@@ -941,6 +962,7 @@ ReadBuffer_common2(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 									  isExtend,
 									  found);
 
+	
 	return BufferDescriptorGetBuffer(bufHdr);
 }
 /*
@@ -1696,7 +1718,7 @@ static BufferDesc *
 BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			BlockNumber blockNum,
 			BufferAccessStrategy strategy,
-			bool *foundPtr)
+			bool *foundPtr,bool isIndex)
 {
 	BufferTag	newTag;			/* identity of requested block */
 	BufferDesc *buf;
@@ -1709,7 +1731,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	pageHeader = BlockNumGetPageHeader(smgr,forkNum,blockNum);
 	buf_id = pageHeader->pd_bufid;
 
-	if( (buf_id <= NBuffers) || (buf_id >= (NBuffers+NPmemBlocks)) )
+	if( (buf_id <= 0) || (buf_id >= (NBuffers+NPmemBlocks)) )
 	{
 		/*
 		* Ensure, while the spinlock's not yet held, that there's a free
@@ -1717,18 +1739,21 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		*/
 		ReservePrivateRefCountEntry();
 
-		buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state);
+		buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state,isIndex);
 	}
 	else
 	{
 		//检查是否是数据库重新启动过PM中遗留的bufid,重新赋值
-		int timestamp = pmem_block_desc[BufferIdToPmemDescId(buf_id)];
-		if( (timestamp > 0) && (timestamp == pageHeader->pd_timestamp) )
+		buf = GetBufferDescriptor(buf_id);
+		if( (buf->timestamp > 0) && (buf->timestamp == pageHeader->pd_timestamp) )
 		{
-			buf = GetBufferDescriptor(buf_id);
 			PinBuffer(buf, strategy);
-			*foundPtr = true;	
-			pmem_block_addr[BufferIdToPmemDescId(buf_id)] = (char*)pageHeader;
+			*foundPtr = true;
+			
+			//保存Pmem block地址
+			if(IsPmemDescId(buf_id))
+				pmem_block_addr[BufferIdToPmemDescId(buf_id)] = (char*)pageHeader;
+
 			return buf;		
 		}
 		else
@@ -1739,7 +1764,7 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			*/
 			ReservePrivateRefCountEntry();
 
-			buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state);
+			buf = StrategyGetBuffer2(pageHeader,buf_id,foundPtr,&buf_state,isIndex);
 		}
 	}
 
@@ -1747,7 +1772,10 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	if(*foundPtr)
 	{
 		PinBuffer(buf, strategy);
-		pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
+
+		if(IsPmemDescId(buf->buf_id))
+			pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
+
 		return buf;	
 	}
 
@@ -1780,8 +1808,11 @@ BufferAlloc3(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
 		buf_state |=  BM_PERMANENT ;
 
-	PinBuffer_Locked3(buf, buf_state);
-	pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
+	//PinBuffer_Locked3(buf, buf_state);
+
+	if(IsPmemDescId(buf->buf_id))
+		pmem_block_addr[BufferIdToPmemDescId(buf->buf_id)] = (char*)pageHeader;
+
 	return buf;
 }
 static bool
@@ -2178,11 +2209,11 @@ PinBuffer_LockHdr(BufferDesc *buf, BufferAccessStrategy strategy)
 static bool
 PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 {
-	if(share_buffer_type == 2)
-	{
-		return PinBuffer_LockHdr(buf,strategy);
-	}
-	else
+	// if(share_buffer_type == 2)
+	// {
+	// 	return PinBuffer_LockHdr(buf,strategy);
+	// }
+	// else
 	{
 		Buffer		b = BufferDescriptorGetBuffer(buf);
 		bool		result;
@@ -2417,11 +2448,11 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 	ref->refcount--;
 	if (ref->refcount == 0)
 	{
-		if(share_buffer_type == 2)
-		{
-			UnpinBuffer_LockHdr(buf);
-		}
-		else
+		// if(share_buffer_type == 2)
+		// {
+		// 	UnpinBuffer_LockHdr(buf);
+		// }
+		// else
 		{
 			uint32		buf_state;
 			uint32		old_buf_state;

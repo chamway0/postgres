@@ -144,7 +144,10 @@ InitBufferPool(void)
 			if(i < NBuffers)
 				pg_atomic_init_u32(&buf->state, 0);
 			else
+			{
 				pg_atomic_init_u32(&buf->state, BM_VALID);//PM上的页面永远具有valid标志
+				buf->timestamp = 0;
+			}
 
 			buf->wait_backend_pid = 0;
 

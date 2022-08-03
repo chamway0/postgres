@@ -359,8 +359,37 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	}
 }
 
+BufferDesc *get_from_buffer_free_list()
+{
+	BufferDesc *buf = NULL;
+	if (StrategyControl->firstFreeBuffer < 0)
+		return buf;
+
+	buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
+	Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+
+	/* Unconditionally remove buffer from freelist */
+	StrategyControl->firstFreeBuffer = buf->freeNext;
+	buf->freeNext = FREENEXT_NOT_IN_LIST;	
+	return buf;
+}
+BufferDesc *get_from_pmem_free_list()
+{
+	BufferDesc *buf = NULL;
+	if (StrategyControl->firstFreePmemBlockDesc < 0)
+		return buf;
+
+	buf = GetBufferDescriptor(StrategyControl->firstFreePmemBlockDesc);
+	Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+
+	/* Unconditionally remove buffer from freelist */
+	StrategyControl->firstFreePmemBlockDesc = buf->freeNext;
+	buf->freeNext = FREENEXT_NOT_IN_LIST;	
+	return buf;
+}
+
 BufferDesc *
-StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_state)
+StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_state,bool isIndex)
 {
 	BufferDesc *buf = NULL;
 	int timestamp = time(NULL);
@@ -370,22 +399,25 @@ StrategyGetBuffer2(PageHeader page,uint32 old_id,bool *foundPtr, uint32 *buf_sta
 
 	if ( page->pd_bufid == old_id )
 	{
-		if (StrategyControl->firstFreePmemBlockDesc < 0)
+		if(isIndex)
+		{
+			//索引优先从DRAM分配
+			buf = get_from_buffer_free_list();
+		}
+
+		if( buf == NULL)
+			buf = get_from_pmem_free_list();
+		
+
+		if( buf == NULL)
 		{
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 			elog(ERROR,"no free pmem block id");
 			return NULL;
 		}	
 			
-		buf = GetBufferDescriptor(StrategyControl->firstFreePmemBlockDesc);
-		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
-
-		/* Unconditionally remove buffer from freelist */
-		StrategyControl->firstFreePmemBlockDesc = buf->freeNext;
-		buf->freeNext = FREENEXT_NOT_IN_LIST;		
-
 		//保存buf_id和timestamp到PM页面头
-		pmem_block_desc[BufferIdToPmemDescId(buf->buf_id)] = timestamp;
+		buf->timestamp = timestamp;
 		page->pd_bufid = buf->buf_id;
 		page->pd_timestamp = timestamp;
 
@@ -534,10 +566,6 @@ StrategyShmemSize(void)
 	/* size of the shared replacement strategy control block */
 	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
 
-	//PM页面描述符时间戳
-	if(share_buffer_type == 2)
-		size = add_size(size, mul_size(NPmemBlocks,sizeof(uint32)));
-
 	return size;
 }
 
@@ -571,7 +599,7 @@ StrategyInitialize(bool init)
 	 */
 	StrategyControl = (BufferStrategyControl *)
 		ShmemInitStruct("Buffer Strategy Status",
-						sizeof(BufferStrategyControl) + NPmemBlocks*sizeof(uint32),
+						sizeof(BufferStrategyControl),
 						&found);
 
 	if (!found)
@@ -587,7 +615,7 @@ StrategyInitialize(bool init)
 		 * Grab the whole linked list of free buffers for our strategy. We
 		 * assume it was previously set up by InitBufferPool().
 		 */
-		StrategyControl->firstFreeBuffer = 0;
+		StrategyControl->firstFreeBuffer = (share_buffer_type == 2)?1 : 0;
 		StrategyControl->lastFreeBuffer = NBuffers - 1;
 
 		/* Initialize the clock sweep pointer */
@@ -603,15 +631,7 @@ StrategyInitialize(bool init)
 
 		//初始化PMem页面描述符空闲链表
 		if(share_buffer_type == 2)
-		{
-			int i;
-			pmem_block_desc = (uint32*)(StrategyControl + 1);
 			StrategyControl->firstFreePmemBlockDesc = NBuffers+1;//链表头从NBuffers+1开始
-			for (i = 0; i < NPmemBlocks; i++)
-			{
-				pmem_block_desc[i] = 0;
-			}
-		}
 	}
 	else
 		Assert(!init);

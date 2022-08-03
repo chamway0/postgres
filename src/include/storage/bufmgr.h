@@ -66,7 +66,6 @@ extern int	backend_flush_after;
 extern int	bgwriter_flush_after;
 
 extern  char**pmem_block_addr;
-extern  uint32* pmem_block_desc;
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
 
